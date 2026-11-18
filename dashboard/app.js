@@ -1,8 +1,9 @@
 // The Pre-Token Radar's dashboard. It reads window.RADAR (written beside dashboard/ by
-// main.ts) and renders the ranked board, the filters, a detail drawer for every protocol,
-// the live-token view and the model tab with its fit, backtest, coverage accounting and
-// sandbox. No network: every byte it shows is in data.js, and the page recomputes each
-// row's implied value from the snapshot figures, so the code and the board visibly agree.
+// main.ts) and renders the ranked board with its validation strip, the filters, a detail
+// drawer for every protocol, the live-token view and the model tab with its size curve,
+// blind tests, coverage accounting and curve explorer. No network: every byte it shows
+// is in data.js, and the page recomputes each row's implied value from the snapshot
+// figures, so the code and the board visibly agree.
 (function () {
   'use strict';
 
@@ -11,7 +12,7 @@
   var app = document.getElementById('board');
   var P = DATA.params;
   var state = { q: '', category: 'all', chain: 'all', watch: false, tab: 'board', sort: 'implied', dir: -1, selected: null };
-  var sandbox = { mult: 1, growth: P.growth_weight };
+  var explorer = { tvl: 500000000 };
 
   function fmtUsd(n) {
     if (n === null || n === undefined || !isFinite(n)) return 'n/a';
@@ -31,14 +32,14 @@
   }
   function fmtMult(n) { return 'x' + n.toFixed(3); }
 
-  // The model in one function: TVL x fitted multiple x growth x maturity. The page
-  // recomputes a row from the snapshot figures and checks the number board.json carries.
-  function impliedOf(row, multScale, growthWeight) {
-    var growth = Math.min(P.growth_cap, Math.max(P.growth_floor, row.change_7d === null || row.change_7d === undefined ? 0 : row.change_7d));
-    var growthMult = 1 + (growth / 100) * growthWeight;
-    var age = row.age_days === null || row.age_days === undefined ? P.unknown_age_days : row.age_days;
-    var maturity = P.maturity_floor + (Math.min(Math.max(age, 0), P.maturity_days) / P.maturity_days) * P.maturity_range;
-    return Math.max(1, Math.round(row.tvl_usd * row.model.multiple * multScale * growthMult * maturity));
+  // The model in one function: TVL x the fitted multiple at that size. The multiple
+  // comes from the size curve (log market cap on log TVL), so the page recomputes a
+  // row from the snapshot figures and checks the number board.json carries.
+  function impliedOf(row, multScale) {
+    return Math.max(1, Math.round(row.tvl_usd * row.model.multiple * (multScale || 1)));
+  }
+  function curveValue(tvl) {
+    return Math.max(1, Math.round(Math.exp(DATA.curve.intercept + DATA.curve.slope * Math.log(Math.max(1, tvl)))));
   }
 
   function el(tag, attrs) {
@@ -105,6 +106,7 @@
       else if (key === 'growth') { av = a.change_7d === null ? -Infinity : a.change_7d; bv = b.change_7d === null ? -Infinity : b.change_7d; }
       else if (key === 'age') { av = a.age_days === null ? Infinity : a.age_days; bv = b.age_days === null ? Infinity : b.age_days; }
       else if (key === 'multiple') { av = a.model.multiple; bv = b.model.multiple; }
+      else if (key === 'verdict') { var order = { FARM: 0, THIN: 1, SKIP: 2 }; av = order[a.farm.verdict]; bv = order[b.farm.verdict]; }
       else if (key === 'efficiency') { av = a.implied_value_usd / Math.max(1, a.farm.gas_usd); bv = b.implied_value_usd / Math.max(1, b.farm.gas_usd); }
       else { av = a.implied_value_usd; bv = b.implied_value_usd; }
       if (av < bv) return -state.dir;
@@ -132,17 +134,32 @@
 
   function lede() {
     var cov = DATA.coverage;
+    var bt = DATA.backtest;
+    var val = DATA.validation;
+    var wf = null;
+    val.variants.forEach(function (v) { if (v.name === 'curve') wf = v.walk_forward; });
+    var flat = null;
+    val.variants.forEach(function (v) { if (v.name === 'flat') flat = v; });
+    var excluded = cov.excluded.reduce(function (n, e) { return n + e.count; }, 0);
+    var verdicts = { FARM: 0, THIN: 0, SKIP: 0 };
+    DATA.rows.forEach(function (r) { verdicts[r.farm.verdict]++; });
     return el('section', { class: 'lede' },
       el('div', null,
         el('h1', { text: cov.watchlist + ' watchlist protocols, plus every early pre-token protocol below the floor' }),
-        el('p', { text: 'The watchlist is the floor: every protocol with at least $' + Math.round(DATA.floor_usd / 1e6) + 'M of TVL that records no token and is not a wrapped or staked product of one that trades. The radar adds ' + cov.early + ' more pre-token protocols below that floor, ranks them all by a fitted implied launch value, and gives each a costed farm plan.' }),
+        el('p', { text: 'The watchlist is the floor: every protocol with at least $' + Math.round(DATA.floor_usd / 1e6) + 'M of TVL that records no token and is not a wrapped or staked product of one that trades. The radar adds ' + cov.early + ' more pre-token protocols below that floor, ranks them all by a size curve fitted on traded tokens, and gives each a dated, costed farm plan with a verdict.' }),
         el('p', { class: 'caveat', text: 'Implied value is this model\u2019s estimate from the snapshot\u2019s own figures, not a price and not a prediction that a token launches. A protocol \u201Crecords no token\u201D when its DefiLlama record carries none; the record is not proof.' })
       ),
       el('div', { class: 'kpis' },
         el('div', { class: 'kpi' }, el('span', { text: 'Watchlist covered' }), el('b', { text: cov.watchlist + ' / ' + cov.watchlist }), el('em', { text: 'the whole floor, no gaps' })),
         el('div', { class: 'kpi' }, el('span', { text: 'Protocols ranked' }), el('b', { text: String(cov.board) }), el('em', { text: cov.early + ' early rows below the floor' })),
-        el('div', { class: 'kpi' }, el('span', { text: 'Global fitted multiple' }), el('b', { text: fmtMult(DATA.global_multiple) }), el('em', { text: DATA.backtest.comps + ' traded comparables' })),
-        el('div', { class: 'kpi' }, el('span', { text: 'Backtest within 2x' }), el('b', { text: Math.round(DATA.backtest.within_2x * 100) + '%' }), el('em', { text: 'leave-one-out, median ratio ' + DATA.backtest.median_ratio.toFixed(2) + 'x' }))
+        el('div', { class: 'kpi' }, el('span', { text: 'Size curve slope' }), el('b', { text: DATA.curve.slope.toFixed(3) }), el('em', { text: DATA.curve.comps + ' traded comparables' })),
+        el('div', { class: 'kpi' }, el('span', { text: 'Leave-one-out within 2x' }), el('b', { text: Math.round(bt.within_2x * 100) + '%' }), el('em', { text: 'median log error ' + bt.median_abs_log_error + ', n=' + bt.comps })),
+        el('div', { class: 'kpi' }, el('span', { text: 'Walk-forward within 2x' }), el('b', { text: wf ? Math.round(wf.within_2x * 100) + '%' : 'n/a' }), el('em', { text: wf ? 'fit before ' + val.split_date + ', tested on ' + val.test_n + ' later listings' : 'too few dated comparables' })),
+        el('div', { class: 'kpi' }, el('span', { text: 'Range calibration' }), el('b', { text: Math.round(val.calibration.coverage * 100) + '%' }), el('em', { text: 'of held-out caps inside their band' }))
+      ),
+      el('div', { class: 'strip' },
+        el('span', null, el('b', { text: cov.total + ' scanned' }), '  →  ' + cov.board + ' ranked  ·  ' + cov.live_token + ' live-token set aside  ·  ' + excluded + ' excluded as products  ·  ' + verdicts.FARM + ' FARM / ' + verdicts.THIN + ' THIN / ' + verdicts.SKIP + ' SKIP'),
+        flat ? el('span', { class: 'strip-note', text: 'Blind tests kept the size curve and dropped the flat multiple (leave-one-out log error ' + bt.median_abs_log_error + ' vs ' + flat.loo.median_abs_log_error + '; walk-forward ' + (wf ? wf.median_abs_log_error : 'n/a') + ' vs ' + (flat.walk_forward ? flat.walk_forward.median_abs_log_error : 'n/a') + '). Category, growth and age terms were tested the same way and dropped: see Model & coverage.' }) : null
       )
     );
   }
@@ -225,6 +242,7 @@
           el('span', { class: 'num', text: fmtUsd(r.implied_value_usd) })
         )),
         el('td', { class: 'num', text: fmtUsd(Math.round(r.implied_value_usd / Math.max(1, r.farm.gas_usd))) }),
+        el('td', null, el('span', { class: 'badge verdict-' + r.farm.verdict.toLowerCase(), text: r.farm.verdict })),
         el('td', null, el('span', { class: 'badge ' + (r.on_watchlist ? 'watch' : 'early'), text: r.on_watchlist ? 'Watchlist' : 'Early' }))
       );
       tbody.appendChild(tr);
@@ -242,6 +260,7 @@
             sortHeader('multiple', 'Multiple'),
             sortHeader('implied', 'Implied value'),
             sortHeader('efficiency', 'Implied / $1 gas'),
+            sortHeader('verdict', 'Verdict'),
             el('th', { scope: 'col', text: 'Board' })
           )),
           tbody
@@ -277,25 +296,27 @@
     return el('div', null, el('span', { text: label }), el('b', { text: value }));
   }
 
-  function sandboxResults() {
-    var rescored = DATA.rows.map(function (r) {
-      return { row: r, value: impliedOf(r, sandbox.mult, sandbox.growth) };
-    }).sort(function (a, b) { return b.value - a.value || (a.row.slug < b.row.slug ? -1 : 1); });
-    var top = rescored.slice(0, 10);
-    var kept = top.filter(function (x) { return x.row.rank <= 10; }).length;
+  function explorerResults() {
+    var tvl = explorer.tvl;
+    var value = curveValue(tvl);
+    var mult = value / tvl;
+    var inside = tvl >= DATA.curve.tvl_min_usd && tvl <= DATA.curve.tvl_max_usd;
+    var nearest = DATA.rows.slice().sort(function (a, b) {
+      return Math.abs(Math.log(a.tvl_usd) - Math.log(tvl)) - Math.abs(Math.log(b.tvl_usd) - Math.log(tvl));
+    }).slice(0, 3);
     var tbody = el('tbody');
-    top.forEach(function (x, i) {
-      tbody.appendChild(el('tr', { onclick: function () { openDetail(x.row.slug); } },
-        el('td', { class: 'num', text: String(i + 1) }),
-        el('td', null, el('b', { text: x.row.name })),
-        el('td', { class: 'num', text: fmtUsd(x.value) }),
-        el('td', { class: 'num', text: 'board #' + x.row.rank })
+    nearest.forEach(function (r) {
+      tbody.appendChild(el('tr', { onclick: function () { openDetail(r.slug); } },
+        el('td', { class: 'num', text: '#' + r.rank }),
+        el('td', null, el('b', { text: r.name })),
+        el('td', { class: 'num', text: fmtUsd(r.tvl_usd) }),
+        el('td', { class: 'num', text: fmtUsd(r.implied_value_usd) })
       ));
     });
     return el('div', null,
-      el('p', { class: 'note', text: kept + ' of the sandbox top 10 are also in the board top 10. The sandbox never changes board.json: the board always uses the fitted model.' }),
+      el('p', { class: 'note', text: 'At ' + fmtUsd(tvl) + ' of TVL the curve implies ' + fmtUsd(value) + ' (multiple ' + fmtMult(mult) + ')' + (inside ? ', inside the fitted TVL range.' : ', OUTSIDE the fitted TVL range: the curve extrapolates here, and rows there carry a SKIP verdict.') + ' The explorer never changes board.json: the board always uses the fitted curve.' }),
       el('div', { class: 'table-wrap' }, el('table', { class: 'fit-table' },
-        el('thead', null, el('tr', null, el('th', { scope: 'col', text: 'Sandbox rank' }), el('th', { scope: 'col', text: 'Protocol' }), el('th', { scope: 'col', text: 'Implied value' }), el('th', { scope: 'col', text: 'Board rank' }))),
+        el('thead', null, el('tr', null, el('th', { scope: 'col', text: 'Board rank' }), el('th', { scope: 'col', text: 'Nearest protocol' }), el('th', { scope: 'col', text: 'TVL' }), el('th', { scope: 'col', text: 'Implied value' }))),
         tbody
       ))
     );
@@ -304,50 +325,68 @@
   function modelTab() {
     var bt = DATA.backtest;
     var cov = DATA.coverage;
-    var fitRows = DATA.categories.slice().sort(function (a, b) { return b.comps - a.comps || (a.category < b.category ? -1 : 1); });
+    var val = DATA.validation;
+    var ablBody = el('tbody');
+    val.variants.forEach(function (v) {
+      ablBody.appendChild(el('tr', { onclick: function () {} },
+        el('td', null, el('b', { text: v.label }), v.kept ? el('span', { class: 'badge verdict-farm', text: ' kept' }) : null),
+        el('td', { class: 'num', text: String(v.loo.median_abs_log_error) }),
+        el('td', { class: 'num', text: Math.round(v.loo.within_2x * 100) + '%' }),
+        el('td', { class: 'num', text: v.walk_forward ? String(v.walk_forward.median_abs_log_error) : 'n/a' }),
+        el('td', { class: 'num', text: v.walk_forward ? Math.round(v.walk_forward.within_2x * 100) + '%' : 'n/a' })
+      ));
+    });
+    var refBody = el('tbody');
+    [10000000, 50000000, 100000000, 500000000, 1000000000, 5000000000, 10000000000].forEach(function (tvl) {
+      var value = curveValue(tvl);
+      refBody.appendChild(el('tr', { onclick: function () {} },
+        el('td', { class: 'num', text: fmtUsd(tvl) }),
+        el('td', { class: 'num', text: fmtUsd(value) }),
+        el('td', { class: 'num', text: fmtMult(value / tvl) }),
+        el('td', { class: 'sub', text: tvl >= DATA.curve.tvl_min_usd && tvl <= DATA.curve.tvl_max_usd ? 'inside the fitted range' : 'outside: extrapolated' })
+      ));
+    });
     var fitBody = el('tbody');
-    fitRows.forEach(function (c) {
-      var fallback = c.comps < P.min_category_comps;
+    DATA.categories.forEach(function (c) {
       fitBody.appendChild(el('tr', { onclick: function () {} },
         el('td', null, el('b', { text: c.category })),
-        el('td', { class: 'num', text: fmtMult(c.multiple) }),
+        el('td', { class: 'num', text: fmtMult(c.median_ratio) }),
         el('td', { class: 'num', text: String(c.comps) }),
-        el('td', { class: 'sub', text: fallback ? 'global median (too few comparables)' : 'category median, shrunk to global' })
+        el('td', { class: 'sub', text: 'yardstick only: the curve ignores category' })
       ));
     });
     var exclBody = el('tbody');
     cov.excluded.forEach(function (e) {
       exclBody.appendChild(el('tr', { onclick: function () {} }, el('td', { text: e.reason }), el('td', { class: 'num', text: String(e.count) })));
     });
-    var resultsBox = el('div', { id: 'sandbox-results' }, sandboxResults());
-    function refreshSandbox() {
+    var namedBody = el('tbody');
+    cov.excluded_named.forEach(function (e) {
+      namedBody.appendChild(el('tr', { onclick: function () {} }, el('td', null, el('b', { text: e.name })), el('td', { class: 'sub', text: e.slug }), el('td', { class: 'sub', text: e.reason })));
+    });
+    var resultsBox = el('div', { id: 'explorer-results' }, explorerResults());
+    function refreshExplorer() {
       resultsBox.textContent = '';
-      resultsBox.appendChild(sandboxResults());
+      resultsBox.appendChild(explorerResults());
     }
-    var multSlider = el('input', { type: 'range', id: 'sb-mult', min: '0.5', max: '2', step: '0.05', value: String(sandbox.mult), 'aria-label': 'Multiple scale' });
-    var multOut = el('output', { text: 'x' + sandbox.mult.toFixed(2) });
-    multSlider.addEventListener('input', function () { sandbox.mult = parseFloat(multSlider.value); multOut.textContent = 'x' + sandbox.mult.toFixed(2); refreshSandbox(); });
-    var growthSlider = el('input', { type: 'range', id: 'sb-growth', min: '0', max: '1', step: '0.05', value: String(sandbox.growth), 'aria-label': 'Growth weight' });
-    var growthOut = el('output', { text: String(sandbox.growth.toFixed(2)) });
-    growthSlider.addEventListener('input', function () { sandbox.growth = parseFloat(growthSlider.value); growthOut.textContent = sandbox.growth.toFixed(2); refreshSandbox(); });
+    var tvlSlider = el('input', { type: 'range', id: 'ex-tvl', min: '7', max: '10.7', step: '0.01', value: String(Math.log10(explorer.tvl)), 'aria-label': 'TVL to price with the curve' });
+    var tvlOut = el('output', { text: fmtUsd(explorer.tvl) });
+    tvlSlider.addEventListener('input', function () { explorer.tvl = Math.round(Math.pow(10, parseFloat(tvlSlider.value))); tvlOut.textContent = fmtUsd(explorer.tvl); refreshExplorer(); });
     return el('div', null,
       el('section', { class: 'panel section' },
         el('h2', { text: 'How implied value is computed' }),
-        el('p', { class: 'note', text: 'One function scores every row, from the snapshot\u2019s own figures only. No protocol name is special-cased and no row is hand-picked.' }),
-        el('div', { class: 'formula', text: 'implied = round( tvl_usd x multiple(category) x (1 + clamp(change_7d, ' + P.growth_floor + ', ' + P.growth_cap + ') / 100 x ' + P.growth_weight + ') x (' + P.maturity_floor + ' + min(age_days, ' + P.maturity_days + ') / ' + P.maturity_days + ' x ' + P.maturity_range + ') )' }),
-        el('p', { class: 'note', text: 'The multiple is the category\u2019s median market-cap/TVL ratio among traded comparables in this same snapshot, winsorised to [' + P.ratio_floor + ', ' + P.ratio_cap + '], shrunk toward the global median with a prior of ' + P.shrink_prior + ' pseudo-comparables, and capped at ' + fmtMult(P.multiple_cap) + '. A category with fewer than ' + P.min_category_comps + ' comparables takes the global median (' + fmtMult(DATA.global_multiple) + '). Age is the time since first listing, the best record of how long a protocol has run with no token; an unlisted age uses ' + P.unknown_age_days + ' days.' })
+        el('p', { class: 'note', text: 'One curve scores every row, from the snapshot\u2019s own figures only. No protocol name is special-cased and no row is hand-picked.' }),
+        el('div', { class: 'formula', text: 'log(market cap) = ' + DATA.curve.intercept.toFixed(4) + ' + ' + DATA.curve.slope.toFixed(4) + ' x log(TVL)   ·   implied = round( exp(a + b x log(TVL)) )' }),
+        el('p', { class: 'note', text: 'The curve is least squares on the logs of ' + DATA.curve.comps + ' traded comparables in this same snapshot (a protocol counts when it records a market cap and TVL, is not a CEX and has no versioned name). The slope is clamped to [' + P.slope_floor + ', ' + P.slope_cap + ']. The fitted range runs from ' + fmtUsd(DATA.curve.tvl_min_usd) + ' to ' + fmtUsd(DATA.curve.tvl_max_usd) + ' of TVL; rows outside it are flagged as extrapolated. Because the curve rises with TVL, the board orders by size — the tests below are why no other term survived, and the curve still sets the level, the error band and the bootstrap band at every size.' }),
+        el('p', { class: 'note', text: 'Farm verdicts follow fixed numeric rules, the same for every row. SKIP when the TVL is outside the fitted range or when 7d growth is at or below ' + P.verdict_growth_skip + '%. THIN when growth is below ' + P.verdict_growth_thin + '%. Otherwise FARM. The bootstrap band is shown in each detail view but does not drive the verdict: it is narrower than the leave-one-out error range at every size. A verdict judges the trend and the fit\u2019s range; it is never a promise that a token launches.' })
       ),
       el('div', { class: 'grid2' },
         el('section', { class: 'panel section' },
-          el('h2', { text: 'Backtest: how rough is the fit?' }),
-          el('div', { class: 'kv' },
-            kvRow('Traded comparables tested', String(bt.comps)),
-            kvRow('Median predicted / actual', bt.median_ratio.toFixed(2) + 'x'),
-            kvRow('Median absolute log error', String(bt.median_abs_log_error)),
-            kvRow('Within 2x of the real cap', Math.round(bt.within_2x * 100) + '%'),
-            kvRow('Implied range factors', fmtMult(bt.low_factor) + ' to ' + fmtMult(bt.high_factor))
-          ),
-          el('p', { class: 'note', text: 'Each comparable was predicted from a fit that never saw it (leave-one-out). The fit is roughly unbiased but wide: market-cap/TVL ratios genuinely span orders of magnitude. Read every implied value as an order of magnitude, and read the range in each detail view. The range factors are the backtest\u2019s own error quartiles, clamped to [0.25x, 4x].' })
+          el('h2', { text: 'Blind tests: what survived, what was dropped' }),
+          el('div', { class: 'table-wrap' }, el('table', { class: 'fit-table' },
+            el('thead', null, el('tr', null, el('th', { scope: 'col', text: 'Variant' }), el('th', { scope: 'col', text: 'LOO log err' }), el('th', { scope: 'col', text: 'LOO 2x' }), el('th', { scope: 'col', text: 'Walk-fwd log err' }), el('th', { scope: 'col', text: 'Walk-fwd 2x' }))),
+            ablBody
+          )),
+          el('p', { class: 'note', text: 'Leave-one-out predicts each comparable from a fit that never saw it (n=' + bt.comps + '). Walk-forward fits on the ' + val.train_n + ' comparables listed before ' + val.split_date + ' and tests on the ' + val.test_n + ' listed at or after it. A term was kept only when it beat the bare curve on BOTH tests; none did, so the board uses the bare curve. Lower log error is better. The range factors are the kept fit\u2019s leave-one-out error quartiles, clamped to [0.25x, 4x]: ' + fmtMult(bt.low_factor) + ' to ' + fmtMult(bt.high_factor) + ', and ' + Math.round(val.calibration.coverage * 100) + '% of held-out market caps land inside their own band (calibration, n=' + val.calibration.n + '). The bootstrap refits the curve ' + val.bootstrap.refits + ' times on resampled comparables: slope ' + val.bootstrap.slope_p5 + ' to ' + val.bootstrap.slope_p95 + ' (median ' + val.bootstrap.slope_median + '), which sets each row\u2019s second band in its detail view.' })
         ),
         el('section', { class: 'panel section' },
           el('h2', { text: 'Coverage: all ' + cov.total + ' protocols accounted for' }),
@@ -362,26 +401,41 @@
             el('thead', null, el('tr', null, el('th', { scope: 'col', text: 'Exclusion reason' }), el('th', { scope: 'col', text: 'Count' }))),
             exclBody
           )),
-          el('p', { class: 'note', text: 'Exclusions follow the watchlist\u2019s own rule: versioned names, bridge / liquid-staking / CEX categories, wrapped or staked names, and exchange-named products. The snapshot carries no parent-protocol field, so the rule is applied from the ten fields it does carry.' })
+          el('p', { class: 'note', text: 'Exclusions follow the watchlist\u2019s own rule: versioned names, bridge / liquid-staking / CEX categories, wrapped or staked names, and exchange-named products. The snapshot carries no parent-protocol field, so the rule is applied from the ten fields it does carry.' }),
+          el('details', { class: 'named' },
+            el('summary', { text: 'Every excluded protocol, named (' + cov.excluded_named.length + ')' }),
+            el('div', { class: 'table-wrap' }, el('table', { class: 'fit-table' },
+              el('thead', null, el('tr', null, el('th', { scope: 'col', text: 'Protocol' }), el('th', { scope: 'col', text: 'Slug' }), el('th', { scope: 'col', text: 'Reason' }))),
+              namedBody
+            ))
+          )
         )
       ),
       el('section', { class: 'panel section' },
-        el('h2', { text: 'Fitted multiples by category' }),
+        el('h2', { text: 'The curve at reference sizes' }),
         el('div', { class: 'table-wrap' }, el('table', { class: 'fit-table' },
-          el('thead', null, el('tr', null, el('th', { scope: 'col', text: 'Category' }), el('th', { scope: 'col', text: 'Multiple' }), el('th', { scope: 'col', text: 'Comparables' }), el('th', { scope: 'col', text: 'How fitted' }))),
+          el('thead', null, el('tr', null, el('th', { scope: 'col', text: 'TVL' }), el('th', { scope: 'col', text: 'Implied value' }), el('th', { scope: 'col', text: 'Effective multiple' }), el('th', { scope: 'col', text: 'Fitted range' }))),
+          refBody
+        )),
+        el('p', { class: 'note', text: 'The multiple falls as TVL rises: the slope is below 1, so market cap grows more slowly than TVL across the traded set. That is the size effect the flat multiple misses.' })
+      ),
+      el('section', { class: 'panel section' },
+        el('h2', { text: 'Category yardsticks (diagnostic only)' }),
+        el('div', { class: 'table-wrap' }, el('table', { class: 'fit-table' },
+          el('thead', null, el('tr', null, el('th', { scope: 'col', text: 'Category' }), el('th', { scope: 'col', text: 'Median mcap / TVL' }), el('th', { scope: 'col', text: 'Comparables' }), el('th', { scope: 'col', text: 'How used' }))),
           fitBody
-        ))
+        )),
+        el('p', { class: 'note', text: 'Shown so the category structure is visible. The blind tests rejected category intercepts, so the board does not use them.' })
       ),
       el('section', { class: 'panel section sandbox' },
-        el('h2', { text: 'Model sandbox: what moves the ranking?' }),
-        el('p', { class: 'note', text: 'Change the assumptions and watch the top 10 re-rank. This only explores the model in the page; board.json always uses the fitted constants above.' }),
-        el('label', { for: 'sb-mult' }, 'Multiple scale ', multOut, multSlider),
-        el('label', { for: 'sb-growth' }, 'Growth weight ', growthOut, growthSlider),
+        el('h2', { text: 'Curve explorer: price any size' }),
+        el('p', { class: 'note', text: 'Move the slider to a TVL and see what the fitted curve implies at that size, with the nearest board rows. This only explores the curve in the page; board.json always uses the fitted constants above.' }),
+        el('label', { for: 'ex-tvl' }, 'TVL ', tvlOut, tvlSlider),
         resultsBox
       ),
       el('section', { class: 'panel section' },
         el('h2', { text: 'What the model does not know' }),
-        el('p', { class: 'note', text: 'The snapshot carries no points program, no funding or team information, no fees or revenue, no user counts and no token announcement. The radar cannot say whether or when a protocol launches a token, how an airdrop would be split, or what farming it returns. Farm plans are generic, safe-by-default steps derived from category, chains, TVL and age; always verify the protocol\u2019s own pages before sending funds.' })
+        el('p', { class: 'note', text: 'The snapshot carries no points program, no funding or team information, no fees or revenue, no user counts and no token announcement. The radar cannot say whether or when a protocol launches a token, how an airdrop would be split, or what farming it returns. Growth and age were tested as model terms and dropped because they lost the blind tests; they still appear as facts on each row and in the verdict rules. Farm plans are generic, safe-by-default steps derived from category, chains, TVL and age; always verify the protocol\u2019s own pages before sending funds.' })
       )
     );
   }
@@ -396,7 +450,7 @@
     state.selected = slug;
     writeHash();
     dialog.textContent = '';
-    var recomputed = impliedOf(row, 1, P.growth_weight);
+    var recomputed = impliedOf(row, 1);
     var agrees = recomputed === row.implied_value_usd;
     var lo = Math.log(Math.max(1, row.implied_low_usd));
     var hi = Math.log(Math.max(2, row.implied_high_usd));
@@ -414,11 +468,13 @@
       el('h3', { text: 'Implied value' }),
       el('div', { class: 'equation' },
         el('div', null, el('span', { text: 'TVL' }), el('b', { text: fmtUsd(row.tvl_usd) })),
-        el('div', null, el('span', { text: 'Fitted multiple (' + (row.category || 'Other') + ', ' + row.model.comps_n + (row.model.comps_n === 1 ? ' comparable)' : ' comparables)') }), el('b', { text: fmtMult(row.model.multiple) })),
-        el('div', null, el('span', { text: 'Seven-day growth (clamped)' }), el('b', { text: fmtPct(row.model.growth_pct) + '  →  x' + row.model.growth_multiplier })),
-        el('div', null, el('span', { text: 'Age with no token' }), el('b', { text: fmtAge(row.age_days) + '  →  x' + row.model.maturity_multiplier })),
+        el('div', null, el('span', { text: 'Size curve (' + DATA.curve.comps + ' comparables)' }), el('b', { text: 'log cap = ' + DATA.curve.intercept.toFixed(2) + ' + ' + DATA.curve.slope.toFixed(3) + ' x log TVL' })),
+        el('div', null, el('span', { text: 'Effective multiple at this size' }), el('b', { text: fmtMult(row.model.multiple) + (row.model.extrapolated ? ' (extrapolated: outside the fitted TVL range)' : '') })),
+        el('div', null, el('span', { text: 'Seven-day growth (a fact, not a model term)' }), el('b', { text: fmtPct(row.change_7d) })),
+        el('div', null, el('span', { text: 'Age with no token (a fact, not a model term)' }), el('b', { text: fmtAge(row.age_days) })),
         el('div', null, el('span', { text: 'Implied value' }), el('b', { text: fmtUsd(row.implied_value_usd) })),
-        el('div', null, el('span', { text: 'Range (backtest spread)' }), el('b', { text: fmtUsd(row.implied_low_usd) + ' – ' + fmtUsd(row.implied_high_usd) }))
+        el('div', null, el('span', { text: 'Range (leave-one-out spread)' }), el('b', { text: fmtUsd(row.implied_low_usd) + ' – ' + fmtUsd(row.implied_high_usd) })),
+        el('div', null, el('span', { text: 'Bootstrap band (200 refits)' }), el('b', { text: fmtUsd(row.model.boot_low_usd) + ' – ' + fmtUsd(row.model.boot_high_usd) }))
       ),
       el('div', { class: 'rangebar', 'aria-hidden': 'true' }, el('i', { style: 'left:0%;right:0%;' }), el('b', { style: 'left:calc(' + pos + '% - 1px);' })),
       el('p', { class: 'sub', text: 'This page recomputes the row as ' + fmtUsd(recomputed) + (agrees ? ', the same number board.json carries.' : ' — which differs from board.json: the data would be stale.') + ' An estimate, not a price; read the range, not the point.' })
@@ -426,13 +482,17 @@
     dialog.appendChild(el('section', { class: 'detail-section' },
       el('h3', { text: 'Farm economics' }),
       el('div', { class: 'totals' },
+        el('span', { class: 'total' }, el('b', { text: row.farm.verdict }), ' — ' + row.farm.verdict_reason),
         el('span', { class: 'total', text: 'Capital $' + row.farm.capital_usd }),
         el('span', { class: 'total', text: 'Gas about $' + row.farm.gas_usd }),
-        el('span', { class: 'total', text: 'Active time ' + row.farm.active_minutes + ' min' }),
-        el('span', { class: 'total', text: 'Hold ' + row.farm.hold_days + ' days' }),
+        el('span', { class: 'total', text: 'Time ' + row.farm.active_minutes + ' min ($' + row.farm.time_value_usd + ' at $' + P.time_value_usd_per_hour + '/hr)' }),
+        el('span', { class: 'total', text: 'Total cost $' + row.farm.total_cost_usd }),
+        el('span', { class: 'total', text: 'Break-even $' + row.farm.breakeven_usd + ' (' + row.farm.breakeven_pct_of_low + '% of the low-end value)' }),
+        el('span', { class: 'total', text: 'Hold ' + row.farm.hold_days + ' days: ' + row.farm.start_date + ' to ' + row.farm.hold_until_date }),
+        el('span', { class: 'total', text: 'Exit if TVL falls below ' + fmtUsd(row.farm.exit_tvl_usd) }),
         el('span', { class: 'total', text: 'Implied per $1 gas ' + fmtUsd(Math.round(row.implied_value_usd / Math.max(1, row.farm.gas_usd))) })
       ),
-      el('p', { class: 'sub', text: 'Capital stays in the position and is not a fee; gas is the estimated cost of the plan\u2019s transactions on ' + (row.chains && row.chains.length ? row.chains[0] : 'its main chain') + '. Implied-per-gas is arithmetic for comparing plans, never a promised return.' })
+      el('p', { class: 'sub', text: 'Capital stays in the position and is not a fee; gas is the estimated cost of the plan\u2019s transactions on ' + (row.chains && row.chains.length ? row.chains[0] : 'its main chain') + '. Break-even is gas plus active time valued at $' + P.time_value_usd_per_hour + ' an hour: what an allocation to this farmer must exceed for the plan to net positive. Implied-per-gas is arithmetic for comparing plans, never a promised return.' })
     ));
     dialog.appendChild(el('section', { class: 'detail-section' },
       el('h3', { text: 'Farm plan' }),
@@ -453,7 +513,7 @@
   function footer() {
     return el('footer', { class: 'footer' },
       el('p', { text: 'Source: ' + DATA.source + '. Snapshot date ' + DATA.as_of + '; the data does not move. Built by one program, main.ts, from the sealed snapshot: no hand-kept list, no network, no names special-cased.' }),
-      el('p', { text: 'Model ' + DATA.model_version + ': fitted multiples from ' + DATA.backtest.comps + ' traded comparables in this snapshot, growth and maturity from each protocol\u2019s own record. The board is the model\u2019s claim, never make.fun\u2019s.' })
+      el('p', { text: 'Model ' + DATA.model_version + ': a size curve fitted on ' + DATA.curve.comps + ' traded comparables in this snapshot, kept because it beat the flat multiple and every added term on leave-one-out and walk-forward tests. The board is the model\u2019s claim, never make.fun\u2019s.' })
     );
   }
 
