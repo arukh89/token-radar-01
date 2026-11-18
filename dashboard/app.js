@@ -1,4 +1,4 @@
-// The Pre-Token Radar's dashboard (model radar-fit-3). It reads window.RADAR (written
+// The Pre-Token Radar's dashboard (model radar-fit-4). It reads window.RADAR (written
 // beside dashboard/ by main.ts) and renders the ranked board with its validation strip,
 // the filters, a detail drawer for every protocol, the live-token view and the model
 // tab with its size curve, blind tests, launch odds, coverage accounting and curve
@@ -20,17 +20,23 @@
 //   LOO range factors 0.2618x-3.0939x, calibration 51.7% (n=118); 80% band
 //   0.1022x-10x, calibration 77.1%. Bootstrap, 200 refits: slope p5/median/p95
 //   0.2874/0.4557/0.6149, intercept 5.3150/8.0788/11.2054.
-//   Launch odds: logistic regression on log TVL, 7d growth, age (standardised, L2),
+//   Launch odds: logistic regression on log TVL, 7d growth, age and one-hot flags
+//   for the six most common categories (counted from the data, re-counted per fold),
 //   fitted on 442 non-product protocols (244 with a token, 198 without); 5-fold CV
-//   AUC 0.727, log-loss 0.6096 vs 0.6877 base rate (55.2%). Coefficients
-//   (standardised): intercept 0.2363, log TVL 0.3396, growth -0.5783, age 0.8115.
-//   The odds are a descriptive base rate, not a forecast that a token launches.
+//   AUC 0.7561, log-loss 0.5850 vs 0.6877 base rate (55.2%). Coefficients
+//   (standardised): intercept 0.2074, log TVL 0.4353, growth -0.6419, age 0.7124;
+//   Dexs 0.2445, Lending 0.1999, Risk Curators -0.5156, Yield 0.1255, RWA -0.059,
+//   Onchain Capital Allocator -0.2363. Category predicts token status, not value:
+//   the same terms lost as value terms. The odds are a descriptive base rate, not
+//   a forecast that a token launches. Growth and age were tested as value terms in
+//   40+ variants across three rounds and none survived three independent checks;
+//   both enter through launch odds instead.
 //   Verdicts: SKIP if TVL is outside the fitted range or 7d growth <= -30%; THIN if
 //   growth < -10% or launch odds < 25%; else FARM. Farm economics: capital $50-250
 //   by TVL, gas $12+$6/week on Ethereum else $3+$1/week, time at $15/hour, exit if
 //   TVL falls 30% or 7d growth is below -20% on two weekly checks.
-//   Coverage: 758 scanned -> 198 ranked (40 watchlist + 158 early), 416 live-token
-//   set aside, 144 excluded as products (named in the model tab).
+//   Coverage: 758 scanned -> 342 audited (198 ranked: 40 watchlist + 158 early;
+//   144 excluded as products, named in the model tab), 416 live-token set aside.
 (function () {
   'use strict';
 
@@ -58,6 +64,9 @@
     return Math.max(0, Math.round(days)) + 'd';
   }
   function fmtMult(n) { return 'x' + n.toFixed(3); }
+  function shortReason(r) {
+    return r.replace('category ', '').replace('versioned name (a pool of another protocol)', 'versioned names').replace('wrapped / staked product by name', 'wrapped/staked by name');
+  }
 
   // The model in one function: TVL x the fitted multiple at that size. The multiple
   // comes from the size curve (log market cap on log TVL), so the page recomputes a
@@ -186,7 +195,8 @@
         el('div', { class: 'kpi' }, el('span', { text: 'Range calibration' }), el('b', { text: Math.round(val.calibration.coverage * 100) + '%' }), el('em', { text: 'of held-out caps inside their band' }))
       ),
       el('div', { class: 'strip' },
-        el('span', null, el('b', { text: cov.total + ' scanned' }), '  →  ' + cov.board + ' ranked  ·  ' + cov.live_token + ' live-token set aside  ·  ' + excluded + ' excluded as products  ·  ' + verdicts.FARM + ' FARM / ' + verdicts.THIN + ' THIN / ' + verdicts.SKIP + ' SKIP'),
+        el('span', null, el('b', { text: cov.total + ' scanned' }), '  →  ' + (cov.board + excluded) + ' audited (' + cov.board + ' ranked  ·  ' + excluded + ' excluded with reasons)  ·  ' + cov.live_token + ' live-token set aside  ·  ' + verdicts.FARM + ' FARM / ' + verdicts.THIN + ' THIN / ' + verdicts.SKIP + ' SKIP'),
+        el('span', { class: 'strip-note', text: 'Excluded: ' + cov.excluded.map(function (e) { return shortReason(e.reason) + ' ' + e.count; }).join('  ·  ') + '. Every excluded protocol is named in Model & coverage.' }),
         flat ? el('span', { class: 'strip-note', text: 'Blind tests kept the size curve and dropped the flat multiple (leave-one-out log error ' + bt.median_abs_log_error + ' vs ' + flat.loo.median_abs_log_error + '; walk-forward ' + (wf ? wf.median_abs_log_error : 'n/a') + ' vs ' + (flat.walk_forward ? flat.walk_forward.median_abs_log_error : 'n/a') + '). Category terms were tested the same way and dropped; growth and age enter through launch odds, which beat the base rate in cross-validation: see Model & coverage.' }) : null
       )
     );
@@ -461,7 +471,7 @@
       ),
       el('section', { class: 'panel section' },
         el('h2', { text: 'Launch odds: a descriptive base rate, not a forecast' }),
-        el('p', { class: 'note', text: 'A logistic regression on log TVL, 7d growth and age in years (features standardised, L2 penalty), fitted on all ' + odds.n + ' non-product protocols in the snapshot: ' + odds.token_n + ' record a token, ' + odds.pretoken_n + ' do not. Five-fold stratified cross-validation: AUC ' + odds.auc + ', log-loss ' + odds.logloss + ' against ' + odds.base_logloss + ' for the base rate (' + Math.round(odds.base_rate * 100) + '% record a token). Standardised coefficients: intercept ' + odds.intercept + ', log TVL ' + odds.coef_log_tvl + ', growth ' + odds.coef_growth + ', age ' + odds.coef_age_years + '. Older protocols record tokens far more often; fast growers record them less often, because they are newer and hotter. The odds say, for protocols of this size, growth and age, what share records a token. They do not say this protocol launches one: the snapshot holds no future outcome, and an old protocol that never launched may never launch. That survivor caveat is part of the number.' }),
+        el('p', { class: 'note', text: 'A logistic regression on log TVL, 7d growth, age in years and one-hot flags for the ' + odds.categories.length + ' most common categories (features standardised, L2 penalty), fitted on all ' + odds.n + ' non-product protocols in the snapshot: ' + odds.token_n + ' record a token, ' + odds.pretoken_n + ' do not. Five-fold stratified cross-validation: AUC ' + odds.auc + ', log-loss ' + odds.logloss + ' against ' + odds.base_logloss + ' for the base rate (' + Math.round(odds.base_rate * 100) + '% record a token). Standardised coefficients: intercept ' + odds.intercept + ', log TVL ' + odds.coef_log_tvl + ', growth ' + odds.coef_growth + ', age ' + odds.coef_age_years + '; categories: ' + odds.categories.map(function (c, i) { return c + ' ' + odds.coef_category[i]; }).join(', ') + '. The shortlist is counted from the data, re-counted on each fold\u2019s training rows alone in cross-validation, and never hand-picked. Category predicts whether a protocol records a token, not what it would be worth: the same terms lost as value terms in the blind tests. Older protocols record tokens far more often; fast growers record them less often, because they are newer and hotter. The odds say, for protocols of this size, growth, age and category, what share records a token. They do not say this protocol launches one: the snapshot holds no future outcome, and an old protocol that never launched may never launch. That survivor caveat is part of the number.' }),
         el('div', { class: 'table-wrap' }, el('table', { class: 'fit-table' },
           el('thead', null, el('tr', null, el('th', { scope: 'col', text: 'Odds decile' }), el('th', { scope: 'col', text: 'Mean predicted odds' }), el('th', { scope: 'col', text: 'Share recording a token' }), el('th', { scope: 'col', text: 'Protocols' }))),
           oddsBody
@@ -497,7 +507,7 @@
       ),
       el('section', { class: 'panel section' },
         el('h2', { text: 'What the model does not know' }),
-        el('p', { class: 'note', text: 'The snapshot carries no points program, no funding or team information, no fees or revenue, no user counts and no token announcement. The radar cannot say whether or when a protocol launches a token, how an airdrop would be split, or what farming it returns. Growth and age were tested as value terms and dropped because they lost the blind tests; they enter instead through launch odds, which beat the base rate in cross-validation and are labelled a base rate, not a forecast. Farm plans are generic, safe-by-default steps derived from category, chains, TVL and age; always verify the protocol\u2019s own pages before sending funds.' })
+        el('p', { class: 'note', text: 'The snapshot carries no points program, no funding or team information, no fees or revenue, no user counts and no token announcement. The radar cannot say whether or when a protocol launches a token, how an airdrop would be split, or what farming it returns. Growth, age and category were tested as value terms across three research rounds and dropped because they lost the blind tests; they enter instead through launch odds, which beat the base rate in cross-validation and are labelled a base rate, not a forecast. Farm plans are generic, safe-by-default steps derived from category, chains, TVL and age; always verify the protocol\u2019s own pages before sending funds.' })
       )
     );
   }
