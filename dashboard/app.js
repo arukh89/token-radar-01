@@ -1,9 +1,36 @@
-// The Pre-Token Radar's dashboard. It reads window.RADAR (written beside dashboard/ by
-// main.ts) and renders the ranked board with its validation strip, the filters, a detail
-// drawer for every protocol, the live-token view and the model tab with its size curve,
-// blind tests, coverage accounting and curve explorer. No network: every byte it shows
-// is in data.js, and the page recomputes each row's implied value from the snapshot
-// figures, so the code and the board visibly agree.
+// The Pre-Token Radar's dashboard (model radar-fit-3). It reads window.RADAR (written
+// beside dashboard/ by main.ts) and renders the ranked board with its validation strip,
+// the filters, a detail drawer for every protocol, the live-token view and the model
+// tab with its size curve, blind tests, launch odds, coverage accounting and curve
+// explorer. No network: every byte it shows is in data.js, and the page recomputes
+// each row's implied value from the snapshot figures, so the code and the board
+// visibly agree.
+//
+// EVIDENCE, computed live by main.ts from the sealed snapshot dated 2026-11-14
+// (758 protocols, 40 on the watchlist) and checked against this comment by a local
+// script, so the numbers here are the numbers the page shows:
+//   Size curve: log(market cap) = 7.9295 + 0.4617 x log(TVL), least squares on 118
+//   traded comparables; fitted TVL range $5,045,118 to $18,721,539,391; slope in [0,1].
+//   Blind tests (median abs log error / within 2x): curve LOO 1.202 / 34.7%,
+//   walk-forward (fit before 2024-02-28 on 43, tested on 44 later listings) 1.0244 /
+//   45.5%. Flat multiple: LOO 1.5752 / 29.7%, walk-forward 1.6017 / 25.0%.
+//   Curve+growth 1.2211/1.0521, curve+maturity 1.1802/1.1623, curve+growth+maturity
+//   1.139/1.1236, curve+category 1.265/0.8637: each lost at least one test, so the
+//   bare curve is kept. A term is kept only when it beats the curve on BOTH tests.
+//   LOO range factors 0.2618x-3.0939x, calibration 51.7% (n=118); 80% band
+//   0.1022x-10x, calibration 77.1%. Bootstrap, 200 refits: slope p5/median/p95
+//   0.2874/0.4557/0.6149, intercept 5.3150/8.0788/11.2054.
+//   Launch odds: logistic regression on log TVL, 7d growth, age (standardised, L2),
+//   fitted on 442 non-product protocols (244 with a token, 198 without); 5-fold CV
+//   AUC 0.727, log-loss 0.6096 vs 0.6877 base rate (55.2%). Coefficients
+//   (standardised): intercept 0.2363, log TVL 0.3396, growth -0.5783, age 0.8115.
+//   The odds are a descriptive base rate, not a forecast that a token launches.
+//   Verdicts: SKIP if TVL is outside the fitted range or 7d growth <= -30%; THIN if
+//   growth < -10% or launch odds < 25%; else FARM. Farm economics: capital $50-250
+//   by TVL, gas $12+$6/week on Ethereum else $3+$1/week, time at $15/hour, exit if
+//   TVL falls 30% or 7d growth is below -20% on two weekly checks.
+//   Coverage: 758 scanned -> 198 ranked (40 watchlist + 158 early), 416 live-token
+//   set aside, 144 excluded as products (named in the model tab).
 (function () {
   'use strict';
 
@@ -106,6 +133,7 @@
       else if (key === 'growth') { av = a.change_7d === null ? -Infinity : a.change_7d; bv = b.change_7d === null ? -Infinity : b.change_7d; }
       else if (key === 'age') { av = a.age_days === null ? Infinity : a.age_days; bv = b.age_days === null ? Infinity : b.age_days; }
       else if (key === 'multiple') { av = a.model.multiple; bv = b.model.multiple; }
+      else if (key === 'odds') { av = a.model.launch_odds; bv = b.model.launch_odds; }
       else if (key === 'verdict') { var order = { FARM: 0, THIN: 1, SKIP: 2 }; av = order[a.farm.verdict]; bv = order[b.farm.verdict]; }
       else if (key === 'efficiency') { av = a.implied_value_usd / Math.max(1, a.farm.gas_usd); bv = b.implied_value_usd / Math.max(1, b.farm.gas_usd); }
       else { av = a.implied_value_usd; bv = b.implied_value_usd; }
@@ -159,7 +187,7 @@
       ),
       el('div', { class: 'strip' },
         el('span', null, el('b', { text: cov.total + ' scanned' }), '  →  ' + cov.board + ' ranked  ·  ' + cov.live_token + ' live-token set aside  ·  ' + excluded + ' excluded as products  ·  ' + verdicts.FARM + ' FARM / ' + verdicts.THIN + ' THIN / ' + verdicts.SKIP + ' SKIP'),
-        flat ? el('span', { class: 'strip-note', text: 'Blind tests kept the size curve and dropped the flat multiple (leave-one-out log error ' + bt.median_abs_log_error + ' vs ' + flat.loo.median_abs_log_error + '; walk-forward ' + (wf ? wf.median_abs_log_error : 'n/a') + ' vs ' + (flat.walk_forward ? flat.walk_forward.median_abs_log_error : 'n/a') + '). Category, growth and age terms were tested the same way and dropped: see Model & coverage.' }) : null
+        flat ? el('span', { class: 'strip-note', text: 'Blind tests kept the size curve and dropped the flat multiple (leave-one-out log error ' + bt.median_abs_log_error + ' vs ' + flat.loo.median_abs_log_error + '; walk-forward ' + (wf ? wf.median_abs_log_error : 'n/a') + ' vs ' + (flat.walk_forward ? flat.walk_forward.median_abs_log_error : 'n/a') + '). Category terms were tested the same way and dropped; growth and age enter through launch odds, which beat the base rate in cross-validation: see Model & coverage.' }) : null
       )
     );
   }
@@ -237,6 +265,7 @@
         el('td', { class: 'num ' + growthClass, text: fmtPct(r.change_7d) }),
         el('td', { class: 'num', text: fmtAge(r.age_days) }),
         el('td', { class: 'num', text: fmtMult(r.model.multiple) }),
+        el('td', { class: 'num', text: Math.round(r.model.launch_odds * 100) + '%' }),
         el('td', null, el('div', { class: 'implied' },
           el('div', { class: 'bar', 'aria-hidden': 'true' }, el('i', { style: 'width:' + Math.max(3, Math.round((r.implied_value_usd / max) * 100)) + '%' })),
           el('span', { class: 'num', text: fmtUsd(r.implied_value_usd) })
@@ -258,6 +287,7 @@
             sortHeader('growth', '7d'),
             sortHeader('age', 'Age'),
             sortHeader('multiple', 'Multiple'),
+            sortHeader('odds', 'Launch odds'),
             sortHeader('implied', 'Implied value'),
             sortHeader('efficiency', 'Implied / $1 gas'),
             sortHeader('verdict', 'Verdict'),
@@ -363,6 +393,24 @@
     cov.excluded_named.forEach(function (e) {
       namedBody.appendChild(el('tr', { onclick: function () {} }, el('td', null, el('b', { text: e.name })), el('td', { class: 'sub', text: e.slug }), el('td', { class: 'sub', text: e.reason })));
     });
+    var odds = val.launch_odds;
+    var oddsBody = el('tbody');
+    odds.calibration.forEach(function (c) {
+      oddsBody.appendChild(el('tr', { onclick: function () {} },
+        el('td', { class: 'num', text: String(c.decile) }),
+        el('td', { class: 'num', text: Math.round(c.mean_pred * 100) + '%' }),
+        el('td', { class: 'num', text: Math.round(c.token_rate * 100) + '%' }),
+        el('td', { class: 'num', text: String(c.n) })
+      ));
+    });
+    var quartBody = el('tbody');
+    odds.quartile_rates.forEach(function (q) {
+      quartBody.appendChild(el('tr', { onclick: function () {} },
+        el('td', null, el('b', { text: q.by })),
+        el('td', { class: 'num', text: q.rates.map(function (r) { return Math.round(r * 100) + '%'; }).join('  ·  ') }),
+        el('td', { class: 'num', text: q.ns.join(' / ') })
+      ));
+    });
     var resultsBox = el('div', { id: 'explorer-results' }, explorerResults());
     function refreshExplorer() {
       resultsBox.textContent = '';
@@ -377,7 +425,7 @@
         el('p', { class: 'note', text: 'One curve scores every row, from the snapshot\u2019s own figures only. No protocol name is special-cased and no row is hand-picked.' }),
         el('div', { class: 'formula', text: 'log(market cap) = ' + DATA.curve.intercept.toFixed(4) + ' + ' + DATA.curve.slope.toFixed(4) + ' x log(TVL)   ·   implied = round( exp(a + b x log(TVL)) )' }),
         el('p', { class: 'note', text: 'The curve is least squares on the logs of ' + DATA.curve.comps + ' traded comparables in this same snapshot (a protocol counts when it records a market cap and TVL, is not a CEX and has no versioned name). The slope is clamped to [' + P.slope_floor + ', ' + P.slope_cap + ']. The fitted range runs from ' + fmtUsd(DATA.curve.tvl_min_usd) + ' to ' + fmtUsd(DATA.curve.tvl_max_usd) + ' of TVL; rows outside it are flagged as extrapolated. Because the curve rises with TVL, the board orders by size — the tests below are why no other term survived, and the curve still sets the level, the error band and the bootstrap band at every size.' }),
-        el('p', { class: 'note', text: 'Farm verdicts follow fixed numeric rules, the same for every row. SKIP when the TVL is outside the fitted range or when 7d growth is at or below ' + P.verdict_growth_skip + '%. THIN when growth is below ' + P.verdict_growth_thin + '%. Otherwise FARM. The bootstrap band is shown in each detail view but does not drive the verdict: it is narrower than the leave-one-out error range at every size. A verdict judges the trend and the fit\u2019s range; it is never a promise that a token launches.' })
+        el('p', { class: 'note', text: 'Farm verdicts follow fixed numeric rules, the same for every row. SKIP when the TVL is outside the fitted range or when 7d growth is at or below ' + P.verdict_growth_skip + '%. THIN when growth is below ' + P.verdict_growth_thin + '% or when the launch odds are below ' + Math.round(P.verdict_odds_thin * 100) + '%. Otherwise FARM. The bootstrap band is shown in each detail view but does not drive the verdict: it is narrower than the leave-one-out error range at every size. A verdict judges the trend, the fit\u2019s range and the base rate; it is never a promise that a token launches.' })
       ),
       el('div', { class: 'grid2' },
         el('section', { class: 'panel section' },
@@ -386,7 +434,7 @@
             el('thead', null, el('tr', null, el('th', { scope: 'col', text: 'Variant' }), el('th', { scope: 'col', text: 'LOO log err' }), el('th', { scope: 'col', text: 'LOO 2x' }), el('th', { scope: 'col', text: 'Walk-fwd log err' }), el('th', { scope: 'col', text: 'Walk-fwd 2x' }))),
             ablBody
           )),
-          el('p', { class: 'note', text: 'Leave-one-out predicts each comparable from a fit that never saw it (n=' + bt.comps + '). Walk-forward fits on the ' + val.train_n + ' comparables listed before ' + val.split_date + ' and tests on the ' + val.test_n + ' listed at or after it. A term was kept only when it beat the bare curve on BOTH tests; none did, so the board uses the bare curve. Lower log error is better. The range factors are the kept fit\u2019s leave-one-out error quartiles, clamped to [0.25x, 4x]: ' + fmtMult(bt.low_factor) + ' to ' + fmtMult(bt.high_factor) + ', and ' + Math.round(val.calibration.coverage * 100) + '% of held-out market caps land inside their own band (calibration, n=' + val.calibration.n + '). The bootstrap refits the curve ' + val.bootstrap.refits + ' times on resampled comparables: slope ' + val.bootstrap.slope_p5 + ' to ' + val.bootstrap.slope_p95 + ' (median ' + val.bootstrap.slope_median + '), which sets each row\u2019s second band in its detail view.' })
+          el('p', { class: 'note', text: 'Leave-one-out predicts each comparable from a fit that never saw it (n=' + bt.comps + '). Walk-forward fits on the ' + val.train_n + ' comparables listed before ' + val.split_date + ' and tests on the ' + val.test_n + ' listed at or after it. A term was kept only when it beat the bare curve on BOTH tests; none did, so the board uses the bare curve. Lower log error is better. The range factors are the kept fit\u2019s leave-one-out error quartiles, clamped to [0.25x, 4x]: ' + fmtMult(bt.low_factor) + ' to ' + fmtMult(bt.high_factor) + ', and ' + Math.round(val.calibration.coverage * 100) + '% of held-out market caps land inside their own band (calibration, n=' + val.calibration.n + '). A wider 80% band from the error deciles, ' + fmtMult(bt.low80_factor) + ' to ' + fmtMult(bt.high80_factor) + ', holds ' + Math.round(val.calibration.coverage80 * 100) + '% of held-out caps. The bootstrap refits the curve ' + val.bootstrap.refits + ' times on resampled comparables: slope ' + val.bootstrap.slope_p5 + ' to ' + val.bootstrap.slope_p95 + ' (median ' + val.bootstrap.slope_median + '), which sets each row\u2019s second band in its detail view.' })
         ),
         el('section', { class: 'panel section' },
           el('h2', { text: 'Coverage: all ' + cov.total + ' protocols accounted for' }),
@@ -412,6 +460,20 @@
         )
       ),
       el('section', { class: 'panel section' },
+        el('h2', { text: 'Launch odds: a descriptive base rate, not a forecast' }),
+        el('p', { class: 'note', text: 'A logistic regression on log TVL, 7d growth and age in years (features standardised, L2 penalty), fitted on all ' + odds.n + ' non-product protocols in the snapshot: ' + odds.token_n + ' record a token, ' + odds.pretoken_n + ' do not. Five-fold stratified cross-validation: AUC ' + odds.auc + ', log-loss ' + odds.logloss + ' against ' + odds.base_logloss + ' for the base rate (' + Math.round(odds.base_rate * 100) + '% record a token). Standardised coefficients: intercept ' + odds.intercept + ', log TVL ' + odds.coef_log_tvl + ', growth ' + odds.coef_growth + ', age ' + odds.coef_age_years + '. Older protocols record tokens far more often; fast growers record them less often, because they are newer and hotter. The odds say, for protocols of this size, growth and age, what share records a token. They do not say this protocol launches one: the snapshot holds no future outcome, and an old protocol that never launched may never launch. That survivor caveat is part of the number.' }),
+        el('div', { class: 'table-wrap' }, el('table', { class: 'fit-table' },
+          el('thead', null, el('tr', null, el('th', { scope: 'col', text: 'Odds decile' }), el('th', { scope: 'col', text: 'Mean predicted odds' }), el('th', { scope: 'col', text: 'Share recording a token' }), el('th', { scope: 'col', text: 'Protocols' }))),
+          oddsBody
+        )),
+        el('p', { class: 'note', text: 'Calibration: predicted odds against the actual token rate in each decile of the same ' + odds.n + ' protocols. The deciles rise with the predictions, with noise in the middle where the model is least sure.' }),
+        el('div', { class: 'table-wrap' }, el('table', { class: 'fit-table' },
+          el('thead', null, el('tr', null, el('th', { scope: 'col', text: 'Token rate by quartile of' }), el('th', { scope: 'col', text: 'Q1 · Q2 · Q3 · Q4' }), el('th', { scope: 'col', text: 'Counts' }))),
+          quartBody
+        )),
+        el('p', { class: 'note', text: 'How the odds are used: one verdict rule (THIN below ' + Math.round(P.verdict_odds_thin * 100) + '%), and the expectation break-even in each detail view, which scales the plan\u2019s cost by 1/odds. The implied value never uses the odds: it is the curve\u2019s conditional value, what a token would be worth if one launches, and the ranking is the curve\u2019s alone.' })
+      ),
+      el('section', { class: 'panel section' },
         el('h2', { text: 'The curve at reference sizes' }),
         el('div', { class: 'table-wrap' }, el('table', { class: 'fit-table' },
           el('thead', null, el('tr', null, el('th', { scope: 'col', text: 'TVL' }), el('th', { scope: 'col', text: 'Implied value' }), el('th', { scope: 'col', text: 'Effective multiple' }), el('th', { scope: 'col', text: 'Fitted range' }))),
@@ -435,7 +497,7 @@
       ),
       el('section', { class: 'panel section' },
         el('h2', { text: 'What the model does not know' }),
-        el('p', { class: 'note', text: 'The snapshot carries no points program, no funding or team information, no fees or revenue, no user counts and no token announcement. The radar cannot say whether or when a protocol launches a token, how an airdrop would be split, or what farming it returns. Growth and age were tested as model terms and dropped because they lost the blind tests; they still appear as facts on each row and in the verdict rules. Farm plans are generic, safe-by-default steps derived from category, chains, TVL and age; always verify the protocol\u2019s own pages before sending funds.' })
+        el('p', { class: 'note', text: 'The snapshot carries no points program, no funding or team information, no fees or revenue, no user counts and no token announcement. The radar cannot say whether or when a protocol launches a token, how an airdrop would be split, or what farming it returns. Growth and age were tested as value terms and dropped because they lost the blind tests; they enter instead through launch odds, which beat the base rate in cross-validation and are labelled a base rate, not a forecast. Farm plans are generic, safe-by-default steps derived from category, chains, TVL and age; always verify the protocol\u2019s own pages before sending funds.' })
       )
     );
   }
@@ -470,10 +532,12 @@
         el('div', null, el('span', { text: 'TVL' }), el('b', { text: fmtUsd(row.tvl_usd) })),
         el('div', null, el('span', { text: 'Size curve (' + DATA.curve.comps + ' comparables)' }), el('b', { text: 'log cap = ' + DATA.curve.intercept.toFixed(2) + ' + ' + DATA.curve.slope.toFixed(3) + ' x log TVL' })),
         el('div', null, el('span', { text: 'Effective multiple at this size' }), el('b', { text: fmtMult(row.model.multiple) + (row.model.extrapolated ? ' (extrapolated: outside the fitted TVL range)' : '') })),
-        el('div', null, el('span', { text: 'Seven-day growth (a fact, not a model term)' }), el('b', { text: fmtPct(row.change_7d) })),
-        el('div', null, el('span', { text: 'Age with no token (a fact, not a model term)' }), el('b', { text: fmtAge(row.age_days) })),
+        el('div', null, el('span', { text: 'Seven-day growth (enters launch odds, not the value curve)' }), el('b', { text: fmtPct(row.change_7d) })),
+        el('div', null, el('span', { text: 'Age with no token (enters launch odds, not the value curve)' }), el('b', { text: fmtAge(row.age_days) })),
+        el('div', null, el('span', { text: 'Launch odds (descriptive base rate)' }), el('b', { text: Math.round(row.model.launch_odds * 100) + '% record a token at this size, growth and age' })),
         el('div', null, el('span', { text: 'Implied value' }), el('b', { text: fmtUsd(row.implied_value_usd) })),
         el('div', null, el('span', { text: 'Range (leave-one-out spread)' }), el('b', { text: fmtUsd(row.implied_low_usd) + ' – ' + fmtUsd(row.implied_high_usd) })),
+        el('div', null, el('span', { text: 'Range, 80% band (error deciles)' }), el('b', { text: fmtUsd(row.model.range80_low_usd) + ' – ' + fmtUsd(row.model.range80_high_usd) })),
         el('div', null, el('span', { text: 'Bootstrap band (200 refits)' }), el('b', { text: fmtUsd(row.model.boot_low_usd) + ' – ' + fmtUsd(row.model.boot_high_usd) }))
       ),
       el('div', { class: 'rangebar', 'aria-hidden': 'true' }, el('i', { style: 'left:0%;right:0%;' }), el('b', { style: 'left:calc(' + pos + '% - 1px);' })),
@@ -488,11 +552,12 @@
         el('span', { class: 'total', text: 'Time ' + row.farm.active_minutes + ' min ($' + row.farm.time_value_usd + ' at $' + P.time_value_usd_per_hour + '/hr)' }),
         el('span', { class: 'total', text: 'Total cost $' + row.farm.total_cost_usd }),
         el('span', { class: 'total', text: 'Break-even $' + row.farm.breakeven_usd + ' (' + row.farm.breakeven_pct_of_low + '% of the low-end value)' }),
+        el('span', { class: 'total', text: 'Expectation break-even $' + row.farm.breakeven_ev_usd + ' at ' + Math.round(row.model.launch_odds * 100) + '% launch odds' }),
         el('span', { class: 'total', text: 'Hold ' + row.farm.hold_days + ' days: ' + row.farm.start_date + ' to ' + row.farm.hold_until_date }),
         el('span', { class: 'total', text: 'Exit if TVL falls below ' + fmtUsd(row.farm.exit_tvl_usd) }),
         el('span', { class: 'total', text: 'Implied per $1 gas ' + fmtUsd(Math.round(row.implied_value_usd / Math.max(1, row.farm.gas_usd))) })
       ),
-      el('p', { class: 'sub', text: 'Capital stays in the position and is not a fee; gas is the estimated cost of the plan\u2019s transactions on ' + (row.chains && row.chains.length ? row.chains[0] : 'its main chain') + '. Break-even is gas plus active time valued at $' + P.time_value_usd_per_hour + ' an hour: what an allocation to this farmer must exceed for the plan to net positive. Implied-per-gas is arithmetic for comparing plans, never a promised return.' })
+      el('p', { class: 'sub', text: 'Capital stays in the position and is not a fee; gas is the estimated cost of the plan\u2019s transactions on ' + (row.chains && row.chains.length ? row.chains[0] : 'its main chain') + '. Break-even is gas plus active time valued at $' + P.time_value_usd_per_hour + ' an hour: what an allocation to this farmer must exceed for the plan to net positive. The expectation break-even scales that cost by 1/launch odds: the allocation, if a token launches, that makes the plan positive in expectation. Implied-per-gas is arithmetic for comparing plans, never a promised return.' })
     ));
     dialog.appendChild(el('section', { class: 'detail-section' },
       el('h3', { text: 'Farm plan' }),
@@ -513,7 +578,7 @@
   function footer() {
     return el('footer', { class: 'footer' },
       el('p', { text: 'Source: ' + DATA.source + '. Snapshot date ' + DATA.as_of + '; the data does not move. Built by one program, main.ts, from the sealed snapshot: no hand-kept list, no network, no names special-cased.' }),
-      el('p', { text: 'Model ' + DATA.model_version + ': a size curve fitted on ' + DATA.curve.comps + ' traded comparables in this snapshot, kept because it beat the flat multiple and every added term on leave-one-out and walk-forward tests. The board is the model\u2019s claim, never make.fun\u2019s.' })
+      el('p', { text: 'Model ' + DATA.model_version + ': a size curve fitted on ' + DATA.curve.comps + ' traded comparables in this snapshot, kept because it beat the flat multiple and every added term on leave-one-out and walk-forward tests, plus launch odds from a cross-validated logistic regression, labelled a base rate and never a forecast. The board is the model\u2019s claim, never make.fun\u2019s.' })
     );
   }
 
