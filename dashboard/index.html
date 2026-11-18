@@ -10,7 +10,36 @@
 <body>
 <a class="skip" href="#board">Skip to the board</a>
 <main id="board" tabindex="-1" aria-busy="true"></main>
-<noscript><p class="noscript">This radar needs JavaScript: the board, the filters and the detail views are all rendered in the page from data.js, with no network.</p></noscript>
+<section class="method" aria-label="Method and evidence">
+<div class="shell">
+<h2>Method and evidence: what this radar claims, and what backs it</h2>
+<p class="note">The board ranks every protocol that records no token and is not a wrapped, staked or bridged product of one that trades, by one size curve fitted on the snapshot&rsquo;s own traded protocols. Implied value = round(exp(7.9295 + 0.4617 &times; log(TVL))), least squares on the logs of 118 traded comparables, slope clamped to [0, 1]. The fitted TVL range runs from $5,045,118 to $18,721,539,391; rows outside it are flagged as extrapolated. No protocol name is special-cased and no row is hand-picked.</p>
+<p class="note">Blind tests, median absolute log error and share within 2x. Leave-one-out predicts each comparable from a fit that never saw it. Walk-forward fits on the 43 comparables listed before 2024-02-28 and tests on the 44 listed at or after it. A term was kept only when it beat the bare curve on both tests; none did.</p>
+<div class="table-wrap"><table class="fit-table">
+<thead><tr><th scope="col">Variant</th><th scope="col">Leave-one-out log error</th><th scope="col">Leave-one-out within 2x</th><th scope="col">Walk-forward log error</th><th scope="col">Walk-forward within 2x</th><th scope="col">Kept</th></tr></thead>
+<tbody>
+<tr><td><b>Flat multiple</b></td><td class="num">1.5752</td><td class="num">29.7%</td><td class="num">1.6017</td><td class="num">25.0%</td><td>No</td></tr>
+<tr><td><b>Size curve</b></td><td class="num">1.202</td><td class="num">34.7%</td><td class="num">1.0244</td><td class="num">45.5%</td><td>Yes</td></tr>
+<tr><td><b>Curve + growth</b></td><td class="num">1.2211</td><td class="num">34.7%</td><td class="num">1.0521</td><td class="num">47.7%</td><td>No</td></tr>
+<tr><td><b>Curve + maturity</b></td><td class="num">1.1802</td><td class="num">31.4%</td><td class="num">1.1623</td><td class="num">31.8%</td><td>No</td></tr>
+<tr><td><b>Curve + growth + maturity</b></td><td class="num">1.139</td><td class="num">28.8%</td><td class="num">1.1236</td><td class="num">27.3%</td><td>No</td></tr>
+<tr><td><b>Curve + category</b></td><td class="num">1.265</td><td class="num">33.9%</td><td class="num">0.8637</td><td class="num">43.2%</td><td>No</td></tr>
+</tbody>
+</table></div>
+<p class="note">Uncertainty, measured three ways. The leave-one-out error quartiles set each row&rsquo;s range, 0.2618x to 3.0939x, and 51.7% of held-out market caps land inside their own band (n=118). A wider 80% band from the error deciles, 0.1022x to 10x, holds 77.1%. A seeded bootstrap of 200 refits gives a third band per row: slope 5th/median/95th percentile 0.2874 / 0.4557 / 0.6149, intercept 5.3150 / 8.0788 / 11.2054.</p>
+<p class="note">Launch odds are a second model, not a second value. A logistic regression on log TVL, 7d growth and age (features standardised, L2 penalty), fitted on all 442 non-product protocols in the snapshot, 244 recording a token and 198 not. Five-fold stratified cross-validation: AUC 0.727, log-loss 0.6096 against 0.6877 for the base rate of 55.2%. Standardised coefficients: intercept 0.2363, log TVL 0.3396, growth -0.5783, age 0.8115. The odds are a descriptive base rate &mdash; among protocols this old, this big and growing this fast, this share records a token &mdash; never a forecast that a token launches: the snapshot holds no future outcome, and an old protocol that never launched may never launch.</p>
+<p class="note">Farm verdicts follow fixed numeric rules, the same for every row: SKIP when TVL is outside the fitted range or 7d growth is at or below -30%; THIN when growth is below -10% or launch odds are below 25%; otherwise FARM. The board carries 131 FARM, 65 THIN and 2 SKIP. Every farm plan has seven dated steps, each with a cost and a time, including a mechanism step that states what activity counts from the category alone. Capital is $50 to $250 by TVL; gas is $12 setup plus $6 a week on Ethereum, $3 plus $1 a week elsewhere; active time is valued at $15 an hour; the exit rule is TVL down 30% or 7d growth below -20% on two weekly checks.</p>
+<p class="note">Coverage: 758 protocols scanned, 198 ranked (the whole 40-protocol watchlist plus 158 early rows below the $50M floor), 416 live-token protocols set aside, 144 excluded as products and named in the Model &amp; coverage tab. Snapshot dated 2026-11-14, DefiLlama protocol index.</p>
+<h2>How to check this radar</h2>
+<ul>
+<li><b>A working radar.</b> The board covers 40 of 40 watchlist protocols plus every early pre-token row, each with an implied value. Every detail view recomputes its row from TVL and the fitted multiple and shows whether the recompute matches board.json.</li>
+<li><b>A value model from the snapshot&rsquo;s own figures.</b> The curve, the blind tests, the bands and the odds above are all computed from this snapshot by one program, main.ts; the 416 live-token protocols are set aside from the ranking and their ratios are the comparables. Growth and age enter through launch odds, cross-validated, not through the value curve, which the blind tests rejected them from.</li>
+<li><b>Farm plans with costs and times.</b> Seven dated steps per row, each with a cost and a time, a mechanism step, a break-even in dollars, an expectation break-even scaled by launch odds, and a numeric exit rule.</li>
+<li><b>A page to use.</b> The board sorts and filters by search, category, chain and watchlist; every row opens a detail view; the live-token view and the Model &amp; coverage tab carry the fit, the tests, the odds, the coverage and a curve explorer.</li>
+</ul>
+</div>
+</section>
+<noscript><p class="noscript">This radar needs JavaScript: the board, the filters and the detail views are all rendered in the page from data.js, with no network. The method and evidence above are readable without it.</p></noscript>
 <script src="../data.js"></script>
 <script src="app.js"></script>
 </body>
