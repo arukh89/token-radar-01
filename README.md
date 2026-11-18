@@ -4,7 +4,7 @@
 [![rank](https://make.fun/badge/token-radar-01/arukh89/token-radar-01/rank.svg)](https://make.fun/bounty/token-radar-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
 [![reward](https://make.fun/badge/token-radar-01/arukh89/token-radar-01/reward.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
 
-The Pre-Token Radar: every protocol that records no token, ranked by a fitted implied launch value, with a costed farm plan for each. The board covers the whole 40-protocol watchlist plus 158 early pre-token protocols below the $50M floor, all scored by one comparables-fitted model learned from the snapshot's own traded protocols. The dashboard is a static page that renders with no network: a sortable, filterable board, a detail view for every protocol, a live-token view set aside from the ranking, and a model tab with the fit, a leave-one-out backtest, full coverage accounting and a sandbox.
+The Pre-Token Radar: every protocol that records no token, ranked by a fitted implied launch value, with a dated, costed farm plan and a verdict for each. The board covers the whole 40-protocol watchlist plus 158 early pre-token protocols below the $50M floor, all scored by one size curve learned from the snapshot's own traded protocols — a curve kept because it beat the flat multiple and every added term on two blind tests. The dashboard is a static page that renders with no network: a sortable, filterable board with the validation evidence and coverage reconciliation on it, a detail view for every protocol, a live-token view set aside from the ranking, and a model tab with the curve, the blind-test record, full coverage accounting and a curve explorer.
 
 ## Run it
 
@@ -16,7 +16,7 @@ mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts --input <snapshot.json>
 
 ## The model
 
-Implied value follows only from the snapshot's figures: TVL x a fitted multiple x growth x maturity. The multiple is the category's median market-cap/TVL ratio among traded comparables in the same snapshot, winsorised, shrunk toward the global median, and capped; categories with fewer than 3 comparables take the global median. A leave-one-out backtest scores the fit against the traded protocols it learned from, and its error spread sets each row's implied range. Farm plans are derived from each protocol's own record (category, chains, TVL, age): six concrete steps with a cost and a time, plus capital, gas, active-time and hold totals.
+Implied value follows only from the snapshot's figures: a size curve, log(market cap) = a + b x log(TVL), fitted by least squares on the traded comparables, slope clamped to [0, 1]. Category multiples, a 7d-growth term and an age term were fitted and tested too, and all three were dropped: each lost to the bare curve on at least one blind test — leave-one-out, and a walk-forward split that fits on protocols listed earlier and tests on protocols listed later. The dashboard shows every variant's blind-test numbers. The leave-one-out error spread sets each row's implied range, its coverage is measured as calibration, and a seeded bootstrap of 200 refits sets a second band per row. Farm plans are derived from each protocol's own record (category, chains, TVL, age, growth): six dated steps with a cost and a time, a break-even in dollars (gas plus active time valued at $15/hour), a FARM / THIN / SKIP verdict from stated numeric rules, and a numeric exit rule.
 
 ---
 
