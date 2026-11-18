@@ -84,6 +84,6 @@ writeFileSync(join(out, 'dossier.json'), buildDossier(out, { text_max_bytes: TEX
 
 process.stdout.write(
   `pre-token radar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} on the watchlist, ${board.length} rows scored (${radar.coverage.early} early, ${radar.coverage.live_token} live set aside, ${radar.coverage.excluded.reduce((n, e) => n + e.count, 0)} excluded)\n` +
-    `pre-token radar: global multiple ${radar.global_multiple}, backtest ${radar.backtest.comps} comps, median ratio ${radar.backtest.median_ratio}, within 2x ${Math.round(radar.backtest.within_2x * 100)}%\n` +
+    `pre-token radar: size curve log(mcap) = ${radar.curve.intercept.toFixed(4)} + ${radar.curve.slope.toFixed(4)} x log(TVL) on ${radar.curve.comps} comps, LOO median log error ${radar.backtest.median_abs_log_error}, within 2x ${Math.round(radar.backtest.within_2x * 100)}%, range calibration ${Math.round(radar.validation.calibration.coverage * 100)}%\n` +
     `pre-token radar: wrote ${join(out, 'board.json')}, ${join(out, 'data.js')}, ${join(out, 'dashboard')} (${dash.length} files), ${join(out, 'screenshots')} (${shots.length} images) and ${join(out, 'dossier.json')}\n`,
 );
