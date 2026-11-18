@@ -19,9 +19,11 @@
 // fitted level, the measured error band, and the bootstrap band from refitting.
 //
 // Growth and age do enter the radar, through a second model that the blind tests
-// support: launch odds. A logistic regression on log TVL, 7d growth and age, fitted on
-// every non-product protocol in the snapshot, estimates the base rate at which
-// protocols of a given size, growth and age record a token. Five-fold cross-validation
+// support: launch odds. A logistic regression on log TVL, 7d growth, age and the six
+// most common categories (one-hot, chosen from the snapshot, never hand-picked),
+// fitted on every non-product protocol in the snapshot, estimates the base rate at
+// which protocols of a given size, growth, age and category record a token. Five-fold
+// cross-validation
 // beats the base rate, so the odds are shown per row, drive one verdict rule, and scale
 // the break-even to an expectation-positive bar. The odds are a descriptive base rate,
 // not a forecast that a token launches, and the dashboard says so wherever they appear.
@@ -88,6 +90,7 @@ export interface ModelParams {
   odds_seed: number;
   odds_growth_floor: number;
   odds_growth_cap: number;
+  odds_top_categories: number;
   exit_tvl_fraction: number;
   exit_growth_pct: number;
 }
@@ -121,12 +124,13 @@ export const PARAMS: ModelParams = {
   odds_seed: 20261114,
   odds_growth_floor: -90,
   odds_growth_cap: 300,
+  odds_top_categories: 6,
   exit_tvl_fraction: 0.7,
   exit_growth_pct: -20,
 };
 
 /** The model's version label: the dashboard names it. */
-export const MODEL_VERSION = 'radar-fit-3';
+export const MODEL_VERSION = 'radar-fit-4';
 
 /** How many live-token protocols the Live token view carries, by market cap. */
 export const LIVE_ROWS = 24;
@@ -250,6 +254,8 @@ export interface LaunchOdds {
   coef_log_tvl: number;
   coef_growth: number;
   coef_age_years: number;
+  categories: string[];
+  coef_category: number[];
   median_growth: number;
   median_age_days: number;
   calibration: { decile: number; mean_pred: number; token_rate: number; n: number }[];
@@ -650,16 +656,22 @@ export function bootstrapBands(snapshot: Snapshot, params: ModelParams, tvls: nu
 // ---------------------------------------------------------------- launch odds
 
 /**
- * Launch odds: the base rate at which protocols of a given size, growth and age
- * record a token. A logistic regression on log TVL, 7d growth and age in years,
- * fitted on every non-product protocol in the snapshot (token or not), with the
- * features standardised and an L2 penalty. Five-fold stratified cross-validation
- * must beat the base rate, or the odds are not shown as evidence. The shuffle is a
- * Fisher-Yates with the seeded generator, so the folds are the same on every engine.
- * The odds are descriptive — "among protocols this old, this big and growing this
- * fast, this share records a token" — never a forecast that a token launches: the
- * snapshot holds no future outcome, and old protocols that never launched may never
- * launch. The dashboard states that caveat wherever the odds appear.
+ * Launch odds: the base rate at which protocols of a given size, growth, age and
+ * category record a token. A logistic regression on log TVL, 7d growth, age in years
+ * and one-hot flags for the six most common categories, fitted on every non-product
+ * protocol in the snapshot (token or not), with the features standardised and an L2
+ * penalty. Category predicts token STATUS here, not value: the same category terms
+ * lost to the bare size curve as value terms, but as odds terms they improve both
+ * cross-validated AUC and log-loss. The shortlist is counted from the data, never
+ * hand-picked, and in cross-validation it is re-counted on each fold's training rows
+ * alone, so no held-out row leaks into its own prediction. Five-fold stratified
+ * cross-validation must beat the base rate, or the odds are not shown as evidence.
+ * The shuffle is a Fisher-Yates with the seeded generator, so the folds are the same
+ * on every engine. The odds are descriptive — "among protocols this old, this big,
+ * growing this fast and in this category, this share records a token" — never a
+ * forecast that a token launches: the snapshot holds no future outcome, and old
+ * protocols that never launched may never launch. The dashboard states that caveat
+ * wherever the odds appear.
  */
 interface OddsRow {
   p: SnapshotProtocol;
@@ -676,40 +688,56 @@ export function fitLaunchOdds(snapshot: Snapshot, params: ModelParams): { odds: 
     .map((p) => ({ p, y: isPreToken(p) ? 0 : 1 }));
   const medChange = median(rows.map((d) => d.p.change_7d).filter((v): v is number => v !== null));
   const medAge = median(rows.map((d) => ageDays(snapshot.as_of, d.p.listed_at)).filter((v): v is number => v !== null));
-  const feats = (p: SnapshotProtocol): [number, number, number] => [
+  const baseFeats = (p: SnapshotProtocol): [number, number, number] => [
     Math.log(p.tvl_usd),
     clampNum(p.change_7d ?? medChange, params.odds_growth_floor, params.odds_growth_cap),
     (ageDays(snapshot.as_of, p.listed_at) ?? medAge) / 365,
   ];
-  const fit = (list: OddsRow[]): { w: number[]; mu: number[]; sd: number[] } => {
-    const X = list.map((d) => feats(d.p));
+  // The category shortlist: the most common categories among the given rows, counted
+  // from the data. Ties keep first-seen order (the sort is stable), so the shortlist
+  // is deterministic for a given snapshot and row order.
+  const topCategories = (list: OddsRow[]): string[] => {
+    const counts = new Map<string, number>();
+    for (const d of list) {
+      const key = d.p.category ?? 'Other';
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, params.odds_top_categories).map(([key]) => key);
+  };
+  const feats = (cats: string[]) => (p: SnapshotProtocol): number[] => [
+    ...baseFeats(p),
+    ...cats.map((c) => ((p.category ?? 'Other') === c ? 1 : 0)),
+  ];
+  const fit = (list: OddsRow[], cats: string[]): { w: number[]; mu: number[]; sd: number[] } => {
+    const f = feats(cats);
+    const X = list.map((d) => f(d.p));
+    const k = X[0]!.length;
     const mu: number[] = [];
     const sd: number[] = [];
-    for (let j = 0; j < 3; j++) {
+    for (let j = 0; j < k; j++) {
       const vs = X.map((r) => r[j]!);
       const m = vs.reduce((a, b) => a + b, 0) / vs.length;
       mu.push(m);
       sd.push(Math.sqrt(vs.reduce((a, b) => a + (b - m) ** 2, 0) / vs.length) || 1);
     }
     const Z = X.map((r) => r.map((v, j) => (v - mu[j]!) / sd[j]!));
-    const w = [0, 0, 0, 0];
+    const w = new Array(k + 1).fill(0);
     for (let it = 0; it < params.odds_iters; it++) {
-      const grad = [0, 0, 0, 0];
+      const grad = new Array(k + 1).fill(0);
       for (let i = 0; i < Z.length; i++) {
-        const z = w[0]! + Z[i]![0]! * w[1]! + Z[i]![1]! * w[2]! + Z[i]![2]! * w[3]!;
+        let z = w[0]!;
+        for (let j = 0; j < k; j++) z += Z[i]![j]! * w[j + 1]!;
         const pr = 1 / (1 + Math.exp(-z));
         const e = pr - list[i]!.y;
         grad[0] += e;
-        grad[1] += e * Z[i]![0]!;
-        grad[2] += e * Z[i]![1]!;
-        grad[3] += e * Z[i]![2]!;
+        for (let j = 0; j < k; j++) grad[j + 1] += e * Z[i]![j]!;
       }
-      for (let j = 0; j < 4; j++) w[j] = w[j]! - (params.odds_lr / Z.length) * grad[j]! - (j > 0 ? (params.odds_lr * params.odds_l2 / Z.length) * w[j]! : 0);
+      for (let j = 0; j <= k; j++) w[j] = w[j]! - (params.odds_lr / Z.length) * grad[j]! - (j > 0 ? (params.odds_lr * params.odds_l2 / Z.length) * w[j]! : 0);
     }
     return { w, mu, sd };
   };
-  const predictWith = (m: { w: number[]; mu: number[]; sd: number[] }, p: SnapshotProtocol): number => {
-    const f = feats(p);
+  const predictWith = (m: { w: number[]; mu: number[]; sd: number[] }, cats: string[], p: SnapshotProtocol): number => {
+    const f = feats(cats)(p);
     const z = m.w[0]! + f.reduce((a, v, j) => a + ((v - m.mu[j]!) / m.sd[j]!) * m.w[j + 1]!, 0);
     return 1 / (1 + Math.exp(-z));
   };
@@ -727,8 +755,9 @@ export function fitLaunchOdds(snapshot: Snapshot, params: ModelParams): { odds: 
   const oof: { y: number; pr: number }[] = [];
   for (let f = 0; f < 5; f++) {
     const train = folds.flatMap((g, i) => (i === f ? [] : g));
-    const m = fit(train);
-    for (const d of folds[f]!) oof.push({ y: d.y, pr: predictWith(m, d.p) });
+    const cats = topCategories(train);
+    const m = fit(train, cats);
+    for (const d of folds[f]!) oof.push({ y: d.y, pr: predictWith(m, cats, d.p) });
   }
   const pos = oof.filter((d) => d.y === 1);
   const neg = oof.filter((d) => d.y === 0);
@@ -739,8 +768,9 @@ export function fitLaunchOdds(snapshot: Snapshot, params: ModelParams): { odds: 
   const tokenN = rows.filter((d) => d.y === 1).length;
   const baseRate = rows.length === 0 ? 0 : tokenN / rows.length;
   const baseLogloss = round4(-(baseRate * Math.log(Math.max(1e-9, baseRate)) + (1 - baseRate) * Math.log(Math.max(1e-9, 1 - baseRate))));
-  const full = fit(rows);
-  const predict = (p: SnapshotProtocol): number => predictWith(full, p);
+  const fullCats = topCategories(rows);
+  const full = fit(rows, fullCats);
+  const predict = (p: SnapshotProtocol): number => predictWith(full, fullCats, p);
   // Calibration deciles: predicted odds against the actual token rate, same universe.
   const scored = rows.map((d) => ({ y: d.y, pr: predict(d.p) })).sort((a, b) => a.pr - b.pr);
   const calibration: LaunchOdds['calibration'] = [];
@@ -782,6 +812,8 @@ export function fitLaunchOdds(snapshot: Snapshot, params: ModelParams): { odds: 
       coef_log_tvl: round4(full.w[1]!),
       coef_growth: round4(full.w[2]!),
       coef_age_years: round4(full.w[3]!),
+      categories: fullCats,
+      coef_category: full.w.slice(4).map((w) => round4(w)),
       median_growth: round4(medChange),
       median_age_days: medAge,
       calibration,
