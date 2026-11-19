@@ -35,7 +35,11 @@
 // derived from each protocol's own record (category, chains, TVL, age, growth): dated
 // steps with a cost and a time, a mechanism step that states what activity counts,
 // a break-even in dollars, a verdict from stated numeric rules, and a numeric exit
-// rule.
+// rule. Each plan also states its net at a $1,000 ticket and a 10% farmers' pool:
+// the expected allocation (launch odds x pool share x implied value x ticket / TVL)
+// minus gas, time at $15/hour and 4% a year forgone on the ticket; a row is FARM
+// only when that net is positive, so a farm plan that loses money in expectation is
+// never a FARM.
 
 /** The snapshot's protocol entry: exactly the ten fields the sealed input carries. */
 export interface SnapshotProtocol {
@@ -93,6 +97,9 @@ export interface ModelParams {
   odds_top_categories: number;
   exit_tvl_fraction: number;
   exit_growth_pct: number;
+  net_ticket_usd: number;
+  net_pool_share: number;
+  net_tbill_rate: number;
 }
 
 export const PARAMS: ModelParams = {
@@ -127,10 +134,13 @@ export const PARAMS: ModelParams = {
   odds_top_categories: 6,
   exit_tvl_fraction: 0.7,
   exit_growth_pct: -20,
+  net_ticket_usd: 1000,
+  net_pool_share: 0.1,
+  net_tbill_rate: 0.04,
 };
 
 /** The model's version label: the dashboard names it. */
-export const MODEL_VERSION = 'radar-fit-4';
+export const MODEL_VERSION = 'radar-fit-5';
 
 /** How many live-token protocols the Live token view carries, by market cap. */
 export const LIVE_ROWS = 24;
@@ -183,6 +193,10 @@ export interface BoardRow {
     breakeven_usd: number;
     breakeven_ev_usd: number;
     breakeven_pct_of_low: number;
+    net_ev_usd: number;
+    net_forgone_usd: number;
+    net_usd: number;
+    breakeven_ticket_usd: number | null;
     verdict: 'FARM' | 'THIN' | 'SKIP';
     verdict_reason: string;
     exit_tvl_usd: number;
@@ -842,12 +856,9 @@ function chainOf(p: SnapshotProtocol): string {
   return p.chains.length > 0 ? p.chains[0]! : 'its main chain';
 }
 
-/** How much capital one farm position needs, from the protocol's own TVL. */
-function capitalFor(p: SnapshotProtocol): number {
-  if (p.tvl_usd >= 5_000_000_000) return 250;
-  if (p.tvl_usd >= 1_000_000_000) return 150;
-  if (p.tvl_usd >= 100_000_000) return 100;
-  return 50;
+/** How much capital one farm position needs: the uniform ticket the net model prices. */
+function capitalFor(params: ModelParams): number {
+  return params.net_ticket_usd;
 }
 
 /** How long to hold, from the protocol's age: younger protocols get a longer qualifying window. */
@@ -918,19 +929,40 @@ function countsFor(p: SnapshotProtocol): string {
  * A protocol's farm verdict, from stated numeric rules applied to every row alike:
  * SKIP when the TVL lies outside the comparables' fitted range (the curve
  * extrapolates there) or when 7d growth is at or below verdict_growth_skip; THIN
- * when growth is below verdict_growth_thin or when the launch odds are below
- * verdict_odds_thin; otherwise FARM. The bootstrap band is shown for every row but
- * does not drive the verdict: it is narrower than the model's leave-one-out error
- * range at every size, so it never dominates the uncertainty. The verdict is about
- * the trend, the fit's range and the base rate, never a promise of a token.
+ * when growth is below verdict_growth_thin, when the launch odds are below
+ * verdict_odds_thin, or when the plan's net at the default ticket and pool share
+ * is not positive; otherwise FARM. The net is the expected allocation (launch
+ * odds x pool share x implied value x ticket / TVL) minus gas, time and the T-bill
+ * rate forgone on the ticket. The bootstrap band is shown for every row but does
+ * not drive the verdict: it is narrower than the model's leave-one-out error range
+ * at every size, so it never dominates the uncertainty. The verdict is about the
+ * trend, the fit's range, the base rate and whether the plan pays, never a promise
+ * of a token.
  */
-export function verdictFor(extrapolated: boolean, growth: number | null, odds: number, params: ModelParams): { verdict: 'FARM' | 'THIN' | 'SKIP'; reason: string } {
+export function verdictFor(
+  extrapolated: boolean,
+  growth: number | null,
+  odds: number,
+  net: { ev: number; net: number; gas: number; timeValue: number; totalCost: number },
+  params: ModelParams,
+): { verdict: 'FARM' | 'THIN' | 'SKIP'; reason: string } {
   const g = growth ?? 0;
+  const ticket = `$${params.net_ticket_usd.toLocaleString('en-US')}`;
+  const share = `${Math.round(params.net_pool_share * 100)}%`;
+  const netStr = `Net ${net.net > 0 ? '+' : '-'}$${Math.abs(net.net).toFixed(2)} at a ${ticket} ticket and ${share} pool`;
   if (extrapolated) return { verdict: 'SKIP', reason: 'TVL outside the fitted range: the curve extrapolates here' };
   if (g <= params.verdict_growth_skip) return { verdict: 'SKIP', reason: `7d growth ${g.toFixed(1)}%: shrinking fast` };
-  if (g < params.verdict_growth_thin) return { verdict: 'THIN', reason: `7d growth ${g.toFixed(1)}%: shrinking, size the position small` };
-  if (odds < params.verdict_odds_thin) return { verdict: 'THIN', reason: `launch odds ${(odds * 100).toFixed(0)}%: below the ${(params.verdict_odds_thin * 100).toFixed(0)}% thin line` };
-  return { verdict: 'FARM', reason: 'TVL inside the fitted range, growth above -10%, launch odds above 25%' };
+  if (g < params.verdict_growth_thin) {
+    const base = `7d growth ${g.toFixed(1)}%: shrinking, size the position small`;
+    return { verdict: 'THIN', reason: net.net > 0 ? `${base}. ${netStr}.` : base };
+  }
+  if (odds < params.verdict_odds_thin) {
+    const base = `launch odds ${(odds * 100).toFixed(0)}%: below the ${(params.verdict_odds_thin * 100).toFixed(0)}% thin line`;
+    return { verdict: 'THIN', reason: net.net > 0 ? `${base}. ${netStr}.` : base };
+  }
+  if (net.net > 0) return { verdict: 'FARM', reason: `${netStr}: expected allocation $${net.ev.toFixed(2)} covers $${net.totalCost} cost` };
+  if (net.net > -net.timeValue) return { verdict: 'THIN', reason: `${netStr}: expected allocation $${net.ev.toFixed(2)} covers gas but not the $${net.timeValue} of time` };
+  return { verdict: 'THIN', reason: `${netStr}: expected allocation $${net.ev.toFixed(2)} does not cover $${net.totalCost} cost` };
 }
 
 /**
@@ -941,19 +973,25 @@ export function verdictFor(extrapolated: boolean, growth: number | null, odds: n
  * cost of farming, not gas alone; the break-even is what an allocation to this
  * farmer must exceed for the plan to net positive, before any token exists. The
  * expectation break-even scales that cost by the launch odds: the allocation, if a
- * token launches, that makes the plan positive in expectation.
+ * token launches, that makes the plan positive in expectation. The net at the
+ * default ticket and pool share, and the ticket at which the plan starts to pay
+ * (null when no ticket pays), are computed beside it: the expected allocation is
+ * the launch odds times the pool share of the implied value times this ticket's
+ * share of TVL, minus gas, time and the T-bill rate forgone while the ticket is
+ * locked.
  */
 export function farmPlan(
   p: SnapshotProtocol,
   asOf: string,
   age: number | null,
+  implied: number,
   impliedLow: number,
   extrapolated: boolean,
   odds: number,
   params: ModelParams,
-): { steps: string[]; capital: number; gas: number; minutes: number; hold: number; timeValue: number; totalCost: number; breakeven: number; breakevenEv: number; breakevenPct: number; verdict: 'FARM' | 'THIN' | 'SKIP'; reason: string; exitTvl: number; start: string; holdUntil: string } {
+): { steps: string[]; capital: number; gas: number; minutes: number; hold: number; timeValue: number; totalCost: number; breakeven: number; breakevenEv: number; breakevenPct: number; netEv: number; netForgone: number; net: number; breakevenTicket: number | null; verdict: 'FARM' | 'THIN' | 'SKIP'; reason: string; exitTvl: number; start: string; holdUntil: string } {
   const chain = chainOf(p);
-  const capital = capitalFor(p);
+  const capital = capitalFor(params);
   const hold = holdDaysFor(age);
   const mainnet = isMainnet(chain);
   const setupGas = mainnet ? 12 : 3;
@@ -965,7 +1003,14 @@ export function farmPlan(
   const breakeven = totalCost;
   const breakevenEv = Math.round(totalCost / Math.max(odds, params.odds_floor));
   const breakevenPct = round4((totalCost / Math.max(1, impliedLow)) * 100);
-  const { verdict, reason } = verdictFor(extrapolated, p.change_7d, odds, params);
+  const ticket = params.net_ticket_usd;
+  const share = params.net_pool_share;
+  const netEv = odds * share * implied * (ticket / p.tvl_usd);
+  const netForgone = ticket * params.net_tbill_rate * hold / 365;
+  const net = netEv - gas - timeValue - netForgone;
+  const perDollar = odds * share * (implied / p.tvl_usd) - (params.net_tbill_rate * hold) / 365;
+  const breakevenTicket = perDollar > 0 ? Math.round((gas + timeValue) / perDollar) : null;
+  const { verdict, reason } = verdictFor(extrapolated, p.change_7d, odds, { ev: netEv, net, gas, timeValue, totalCost }, params);
   const exitTvl = Math.max(1, Math.round(p.tvl_usd * params.exit_tvl_fraction));
   const start = asOf;
   const holdUntil = addDays(asOf, hold);
@@ -979,7 +1024,7 @@ export function farmPlan(
     stepText("Before you withdraw, open the protocol's own points or rewards page from the link it publishes and claim only there; never pay a fee to claim and never sign a blind approval.", 'no fee to check, and never pay to claim', '10 minutes'),
     stepText(`Write the wallet, the dates and every transaction hash in a farm log, then unwind after ${holdUntil} in reverse: withdraw, revoke approvals you no longer need, and keep the log.`, 'nothing but the log', '5 minutes'),
   ];
-  return { steps, capital, gas, minutes, hold, timeValue, totalCost, breakeven, breakevenEv, breakevenPct, verdict, reason, exitTvl, start, holdUntil };
+  return { steps, capital, gas, minutes, hold, timeValue, totalCost, breakeven, breakevenEv, breakevenPct, netEv, netForgone, net, breakevenTicket, verdict, reason, exitTvl, start, holdUntil };
 }
 
 // ---------------------------------------------------------------- the board
@@ -1014,7 +1059,7 @@ export function buildBoard(snapshot: Snapshot, params: ModelParams = PARAMS): { 
     const band = boot.bands.get(p.tvl_usd)!;
     const extrapolated = p.tvl_usd < curve.tvl_min_usd || p.tvl_usd > curve.tvl_max_usd;
     const odds = round4(predictOdds(p));
-    const plan = farmPlan(p, snapshot.as_of, age, Math.max(1, Math.round(implied * backtest.low_factor)), extrapolated, odds, params);
+    const plan = farmPlan(p, snapshot.as_of, age, implied, Math.max(1, Math.round(implied * backtest.low_factor)), extrapolated, odds, params);
     return { p, multiple, age, implied, band, extrapolated, odds, plan };
   });
   scored.sort((a, b) => b.implied - a.implied || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0));
@@ -1056,6 +1101,10 @@ export function buildBoard(snapshot: Snapshot, params: ModelParams = PARAMS): { 
       breakeven_usd: s.plan.breakeven,
       breakeven_ev_usd: s.plan.breakevenEv,
       breakeven_pct_of_low: s.plan.breakevenPct,
+      net_ev_usd: s.plan.netEv,
+      net_forgone_usd: s.plan.netForgone,
+      net_usd: s.plan.net,
+      breakeven_ticket_usd: s.plan.breakevenTicket,
       verdict: s.plan.verdict,
       verdict_reason: s.plan.reason,
       exit_tvl_usd: s.plan.exitTvl,
