@@ -1,4 +1,4 @@
-// The pre-token radar's model, version 2: one sealed DefiLlama snapshot in, one ranked
+// The pre-token radar's model, version 5: one sealed DefiLlama snapshot in, one ranked
 // board out.
 //
 // The board ranks every protocol that records no token and is not a wrapped, staked or
@@ -356,9 +356,10 @@ export function addDays(isoDate: string, days: number): string {
   return new Date(t + days * DAY_MS).toISOString().slice(0, 10);
 }
 
-/** The median of a non-empty list; the list is copied, never reordered. */
+/** The median of a non-empty list; the list is copied, never reordered. Throws on an empty list instead of returning NaN. */
 export function median(values: number[]): number {
   const sorted = [...values].sort((a, b) => a - b);
+  if (sorted.length === 0) throw new Error('median of an empty list');
   const mid = Math.floor(sorted.length / 2);
   return sorted.length % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
 }
@@ -574,8 +575,8 @@ function scorePairs(pairs: [number, number][]): TestStats {
 /**
  * The blind tests: leave-one-out (each comparable predicted from a fit that never saw
  * it) and walk-forward (fit on the comparables listed before the median listing date,
- * tested on those listed at or after it). A variant is kept only when it is no worse
- * than the bare curve on BOTH tests' median absolute log error; the bare curve is
+ * tested on those listed at or after it). A variant is kept only when it beats
+ * the bare curve on BOTH tests' median absolute log error; the bare curve is
  * always kept, and ties keep the simpler variant, so the kept model is the curve.
  */
 export function validateVariants(snapshot: Snapshot, params: ModelParams): { variants: VariantTest[]; splitDate: string | null; trainN: number; testN: number } {
@@ -943,13 +944,14 @@ export function verdictFor(
   extrapolated: boolean,
   growth: number | null,
   odds: number,
-  net: { ev: number; net: number; gas: number; timeValue: number; totalCost: number },
+  net: { ev: number; net: number; gas: number; timeValue: number; totalCost: number; forgone: number },
   params: ModelParams,
 ): { verdict: 'FARM' | 'THIN' | 'SKIP'; reason: string } {
   const g = growth ?? 0;
   const ticket = `$${params.net_ticket_usd.toLocaleString('en-US')}`;
   const share = `${Math.round(params.net_pool_share * 100)}%`;
   const netStr = `Net ${net.net > 0 ? '+' : '-'}$${Math.abs(net.net).toFixed(2)} at a ${ticket} ticket and ${share} pool`;
+  const fullCost = net.totalCost + net.forgone;
   if (extrapolated) return { verdict: 'SKIP', reason: 'TVL outside the fitted range: the curve extrapolates here' };
   if (g <= params.verdict_growth_skip) return { verdict: 'SKIP', reason: `7d growth ${g.toFixed(1)}%: shrinking fast` };
   if (g < params.verdict_growth_thin) {
@@ -960,9 +962,9 @@ export function verdictFor(
     const base = `launch odds ${(odds * 100).toFixed(0)}%: below the ${(params.verdict_odds_thin * 100).toFixed(0)}% thin line`;
     return { verdict: 'THIN', reason: net.net > 0 ? `${base}. ${netStr}.` : base };
   }
-  if (net.net > 0) return { verdict: 'FARM', reason: `${netStr}: expected allocation $${net.ev.toFixed(2)} covers $${net.totalCost} cost` };
-  if (net.net > -net.timeValue) return { verdict: 'THIN', reason: `${netStr}: expected allocation $${net.ev.toFixed(2)} covers gas but not the $${net.timeValue} of time` };
-  return { verdict: 'THIN', reason: `${netStr}: expected allocation $${net.ev.toFixed(2)} does not cover $${net.totalCost} cost` };
+  if (net.net > 0) return { verdict: 'FARM', reason: `${netStr}: expected allocation $${net.ev.toFixed(2)} covers $${fullCost.toFixed(2)} of cost (gas, time and T-bill forgone)` };
+  if (net.net > -net.timeValue) return { verdict: 'THIN', reason: `${netStr}: expected allocation $${net.ev.toFixed(2)} covers gas and T-bill forgone but not the $${net.timeValue} of time` };
+  return { verdict: 'THIN', reason: `${netStr}: expected allocation $${net.ev.toFixed(2)} does not cover $${fullCost.toFixed(2)} of cost` };
 }
 
 /**
@@ -1005,12 +1007,13 @@ export function farmPlan(
   const breakevenPct = round4((totalCost / Math.max(1, impliedLow)) * 100);
   const ticket = params.net_ticket_usd;
   const share = params.net_pool_share;
-  const netEv = odds * share * implied * (ticket / p.tvl_usd);
+  const tvl = p.tvl_usd > 0 ? p.tvl_usd : 0;
+  const netEv = tvl > 0 ? odds * share * implied * (ticket / tvl) : 0;
   const netForgone = ticket * params.net_tbill_rate * hold / 365;
   const net = netEv - gas - timeValue - netForgone;
-  const perDollar = odds * share * (implied / p.tvl_usd) - (params.net_tbill_rate * hold) / 365;
+  const perDollar = tvl > 0 ? odds * share * (implied / tvl) - (params.net_tbill_rate * hold) / 365 : -(params.net_tbill_rate * hold) / 365;
   const breakevenTicket = perDollar > 0 ? Math.round((gas + timeValue) / perDollar) : null;
-  const { verdict, reason } = verdictFor(extrapolated, p.change_7d, odds, { ev: netEv, net, gas, timeValue, totalCost }, params);
+  const { verdict, reason } = verdictFor(extrapolated, p.change_7d, odds, { ev: netEv, net, gas, timeValue, totalCost, forgone: netForgone }, params);
   const exitTvl = Math.max(1, Math.round(p.tvl_usd * params.exit_tvl_fraction));
   const start = asOf;
   const holdUntil = addDays(asOf, hold);
@@ -1040,10 +1043,10 @@ export function buildBoard(snapshot: Snapshot, params: ModelParams = PARAMS): { 
   const watchlist = new Set(snapshot.watchlist);
   const index = new Map(snapshot.protocols.map((p) => [p.slug, p]));
   const chosen = new Map<string, SnapshotProtocol>();
-  // The watchlist is the floor: every slug, even one the snapshot no longer carries.
+  // The watchlist is the floor: every watchlist slug the snapshot still carries is ranked, and only if it is rankable. A slug the snapshot no longer carries is skipped here and fails the run in boardIssue.
   for (const slug of snapshot.watchlist) {
     const p = index.get(slug);
-    if (p !== undefined) chosen.set(slug, p);
+    if (p !== undefined && isRankable(p)) chosen.set(slug, p);
   }
   // The early radar: every other rankable pre-token protocol, at any size.
   for (const p of snapshot.protocols) {
@@ -1058,7 +1061,7 @@ export function buildBoard(snapshot: Snapshot, params: ModelParams = PARAMS): { 
     const age = ageDays(snapshot.as_of, p.listed_at);
     const band = boot.bands.get(p.tvl_usd)!;
     const extrapolated = p.tvl_usd < curve.tvl_min_usd || p.tvl_usd > curve.tvl_max_usd;
-    const odds = round4(predictOdds(p));
+    const odds = predictOdds(p);
     const plan = farmPlan(p, snapshot.as_of, age, implied, Math.max(1, Math.round(implied * backtest.low_factor)), extrapolated, odds, params);
     return { p, multiple, age, implied, band, extrapolated, odds, plan };
   });
@@ -1134,10 +1137,10 @@ export function buildBoard(snapshot: Snapshot, params: ModelParams = PARAMS): { 
   return { board, curve, backtest, validation };
 }
 
-/** The live-token protocols, by market cap, for the dashboard's Live token view. */
+/** The live-token protocols, by market cap, for the dashboard's Live token view. Every protocol that records a token is live, including exchanges: the view shows the largest, and coverage counts the same set. */
 export function liveRows(snapshot: Snapshot): LiveRow[] {
   return snapshot.protocols
-    .filter((p) => !isPreToken(p) && p.category !== 'CEX')
+    .filter((p) => !isPreToken(p))
     .sort((a, b) => (b.mcap_usd ?? 0) - (a.mcap_usd ?? 0) || b.tvl_usd - a.tvl_usd || (a.slug < b.slug ? -1 : 1))
     .slice(0, LIVE_ROWS)
     .map((p) => ({
@@ -1275,6 +1278,7 @@ export function boardIssue(board: BoardRow[], snapshot: Snapshot): string | null
   }
   for (const r of board) {
     if (!Number.isSafeInteger(r.implied_value_usd) || r.implied_value_usd <= 0 || r.implied_value_usd > 100_000_000_000_000) return `${r.slug} has implied value ${r.implied_value_usd}`;
+    if (!Number.isFinite(r.farm.net_ev_usd) || !Number.isFinite(r.farm.net_forgone_usd) || !Number.isFinite(r.farm.net_usd) || (r.farm.breakeven_ticket_usd !== null && !Number.isFinite(r.farm.breakeven_ticket_usd))) return `${r.slug} has a non-finite net field`;
     if (r.farm_steps.length < 3 || r.farm_steps.length > 12) return `${r.slug} has ${r.farm_steps.length} farm steps`;
     for (const s of r.farm_steps) {
       const len = s.trim().length;
