@@ -52,16 +52,21 @@ writeFileSync(join(out, 'board.json'), `${JSON.stringify({ rows: board })}\n`);
 writeFileSync(join(out, 'data.js'), dataScript(radar));
 
 /** Copy one directory's regular files into `to`, skipping names that start with a dot. */
-function copyFiles(from: string, to: string): string[] {
+function copyFiles(from: string, to: string, prefix = ''): string[] {
   if (!existsSync(from)) return [];
   mkdirSync(to, { recursive: true });
   const copied: string[] = [];
   for (const name of readdirSync(from)) {
     if (name.startsWith('.')) continue;
     const path = join(from, name);
+    const rel = prefix ? `${prefix}/${name}` : name;
+    if (statSync(path).isDirectory()) {
+      copied.push(...copyFiles(path, join(to, name), rel));
+      continue;
+    }
     if (!statSync(path).isFile()) continue;
     copyFileSync(path, join(to, name));
-    copied.push(name);
+    copied.push(rel);
   }
   return copied;
 }
