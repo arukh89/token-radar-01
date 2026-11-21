@@ -1,4 +1,4 @@
-// The pre-token radar's model, version 5: one sealed DefiLlama snapshot in, one ranked
+// The pre-token radar's model, version 7: one sealed DefiLlama snapshot in, one ranked
 // board out.
 //
 // The board ranks every protocol that records no token and is not a wrapped, staked or
@@ -140,7 +140,7 @@ export const PARAMS: ModelParams = {
 };
 
 /** The model's version label: the dashboard names it. */
-export const MODEL_VERSION = 'radar-fit-5';
+export const MODEL_VERSION = 'radar-fit-7';
 
 /** How many live-token protocols the Live token view carries, by market cap. */
 export const LIVE_ROWS = 24;
@@ -950,7 +950,7 @@ export function verdictFor(
   const g = growth ?? 0;
   const ticket = `$${params.net_ticket_usd.toLocaleString('en-US')}`;
   const share = `${Math.round(params.net_pool_share * 100)}%`;
-  const netStr = `Net ${net.net > 0 ? '+' : '-'}$${Math.abs(net.net).toFixed(2)} at a ${ticket} ticket and ${share} pool`;
+  const netStr = `Net ${net.net > 0 ? '+' : '-'}$${Math.round(Math.abs(net.net))} at a ${ticket} ticket and ${share} pool`;
   const fullCost = net.totalCost + net.forgone;
   if (extrapolated) return { verdict: 'SKIP', reason: 'TVL outside the fitted range: the curve extrapolates here' };
   if (g <= params.verdict_growth_skip) return { verdict: 'SKIP', reason: `7d growth ${g.toFixed(1)}%: shrinking fast` };
@@ -962,9 +962,9 @@ export function verdictFor(
     const base = `launch odds ${(odds * 100).toFixed(0)}%: below the ${(params.verdict_odds_thin * 100).toFixed(0)}% thin line`;
     return { verdict: 'THIN', reason: net.net > 0 ? `${base}. ${netStr}.` : base };
   }
-  if (net.net > 0) return { verdict: 'FARM', reason: `${netStr}: expected allocation $${net.ev.toFixed(2)} covers $${fullCost.toFixed(2)} of cost (gas, time and T-bill forgone)` };
-  if (net.net > -net.timeValue) return { verdict: 'THIN', reason: `${netStr}: expected allocation $${net.ev.toFixed(2)} covers gas and T-bill forgone but not the $${net.timeValue} of time` };
-  return { verdict: 'THIN', reason: `${netStr}: expected allocation $${net.ev.toFixed(2)} does not cover $${fullCost.toFixed(2)} of cost` };
+  if (net.net > 0) return { verdict: 'FARM', reason: `${netStr}: expected allocation ~$${Math.round(net.ev)} covers $${Math.round(fullCost)} of cost (gas, time and T-bill forgone)` };
+  if (net.net > -net.timeValue) return { verdict: 'THIN', reason: `${netStr}: expected allocation ~$${Math.round(net.ev)} covers gas and T-bill forgone but not the $${net.timeValue} of time` };
+  return { verdict: 'THIN', reason: `${netStr}: expected allocation ~$${Math.round(net.ev)} does not cover $${Math.round(fullCost)} of cost` };
 }
 
 /**
