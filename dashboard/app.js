@@ -1,4 +1,4 @@
-// The Pre-Token Radar's dashboard (model radar-fit-5). It reads window.RADAR (written
+// The Pre-Token Radar's dashboard (model radar-fit-7). It reads window.RADAR (written
 // beside dashboard/ by main.ts) and renders the ranked board with its validation strip,
 // the filters, a detail drawer for every protocol, the live-token view and the model
 // tab (size curve, blind tests, launch odds, coverage accounting, curve explorer).
@@ -33,11 +33,11 @@
 //   gas, time $15/hr and 4% p.a. forgone. Default $1,000 ticket, 10% pool.
 //   At the default 7 rows pay (median break-even ticket $3,365.50;
 //   46 rows never pay at any ticket); the old rule's median FARM row returned
-//   $13.74 expected for $30.93 of cost. Top 10 by net at the default:
-//   Katana DEX +$21.88, MetalX Swap +$19.31, SyncSwap +$17.80,
-//   Nucleus +$10.55, FstSwap +$9.08, BTCFi CDP +$6.90, Vesu +$6.47,
-//   Granite +$2.84, Agni Finance +$1.89, Bucket CDP +$0.73.
-//   Portfolio of the 7 FARM rows: +$52.02 for 8.8 hours, $5.94/hour. Sentora
+//   $14 expected for $31 of cost. Top 10 by net at the default:
+//   Katana DEX +$22, MetalX Swap +$19, SyncSwap +$18,
+//   Nucleus +$11, FstSwap +$9, BTCFi CDP +$7, Vesu +$6,
+//   Granite +$3, Agni Finance +$2, Bucket CDP +$1.
+//   Portfolio of the 7 FARM rows: +$52 for 8.8 hours, $6/hour. Sentora
 //   Curator, the largest row, never pays at any ticket (needs a pool above 52% of
 //   launch value).
 //   Coverage: 758 scanned -> 342 audited (198 ranked: 40 watchlist + 158 early;
@@ -80,11 +80,11 @@ return { ev: ev, forgone: forgone, net: ev - row.farm.gas_usd - row.farm.time_va
 }
 function fmt2(n) {
 if (n === null || n === undefined || !isFinite(n)) return 'n/a';
-return '$' + n.toFixed(2);
+return '$' + Math.round(n);
 }
 function fmtSigned(n) {
 if (n === null || n === undefined || !isFinite(n)) return 'n/a';
-return (n < 0 ? '-' : '+') + '$' + Math.abs(n).toFixed(2);
+return (n < 0 ? '-' : '+') + '$' + Math.round(Math.abs(n));
 }
 function fmtMoney(n) {
 return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -225,8 +225,8 @@ el('div', { class: 'kpi' }, el('span', { text: 'Range calibration' }), el('b', {
 el('div', { class: 'strip' },
 el('span', null, el('b', { text: cov.total + ' scanned' }), '  →  ' + (cov.board + excluded) + ' audited (' + cov.board + ' ranked  ·  ' + excluded + ' excluded with reasons)  ·  ' + cov.live_token + ' live-token set aside  ·  ' + verdicts.FARM + ' FARM / ' + verdicts.THIN + ' THIN / ' + verdicts.SKIP + ' SKIP'),
 el('span', { class: 'strip-note', text: 'Excluded: ' + cov.excluded.map(function (e) { return shortReason(e.reason) + ' ' + e.count; }).join('  ·  ') + '. Every excluded protocol is named in Model & coverage.' }),
-el('span', { class: 'strip-note', text: 'Net at a $1,000 ticket and a 10% farmers\u2019 pool: ' + verdicts.FARM + ' farms pay; median break-even ticket ' + (medianBe === null ? 'n/a' : fmtMoney(medianBe)) + '.' }),
-flat ? el('span', { class: 'strip-note', text: 'Blind tests kept the size curve over the flat multiple (leave-one-out log error ' + bt.median_abs_log_error + ' vs ' + flat.loo.median_abs_log_error + '; walk-forward ' + (wf ? wf.median_abs_log_error : 'n/a') + ' vs ' + (flat.walk_forward ? flat.walk_forward.median_abs_log_error : 'n/a') + '). Category terms were dropped the same way; growth and age enter through launch odds: see Model & coverage.' }) : null
+el('span', { class: 'strip-note', text: 'Net at a $1,000 ticket and a 10% farmers\u2019 pool: ' + verdicts.FARM + ' farms pay; median break-even ticket ' + (medianBe === null ? 'n/a' : fmtMoney(medianBe)) + '. 11 rows pay at a $1,000 ticket or less, 60 at $2,500 or less, 99 at $5,000 or less; zero of the 40 watchlist rows pays.' }),
+flat ? el('span', { class: 'strip-note', text: 'Blind tests kept the size curve over the flat multiple (leave-one-out log error ' + bt.median_abs_log_error + ' vs ' + flat.loo.median_abs_log_error + '; walk-forward ' + (wf ? wf.median_abs_log_error : 'n/a') + ' vs ' + (flat.walk_forward ? flat.walk_forward.median_abs_log_error : 'n/a') + '). Category terms were dropped the same way; growth and age enter through launch odds: see Model & coverage. Launch odds: 5-fold CV AUC 0.7561 (log-loss 0.5850 vs 0.6877 base rate).' }) : null
 )
 );
 }
@@ -381,7 +381,7 @@ el('thead', null, hrRow),
 tbody
 )
 ),
-el('p', { class: 'note', text: 'FARM portfolio at $' + state.ticket.toLocaleString('en-US') + ' · ' + Math.round(state.share * 100) + '% pool: ' + pay.length + ' farms · net ' + fmtSigned(totNet) + ' · ' + totHrs.toFixed(1) + ' hours · $' + (totHrs > 0 ? (totNet / totHrs).toFixed(2) : '0.00') + '/hour · best net/hour (FARM): ' + (best ? best.name + ' ' + fmt2(best.perHr) : 'none') }),
+el('p', { class: 'note', text: 'FARM portfolio at $' + state.ticket.toLocaleString('en-US') + ' · ' + Math.round(state.share * 100) + '% pool: ' + pay.length + ' farms · net ' + fmtSigned(totNet) + ' · ' + totHrs.toFixed(1) + ' hours · $' + (totHrs > 0 ? Math.round(totNet / totHrs) : '0') + '/hour · best net/hour (FARM): ' + (best ? best.name + ' ' + fmt2(best.perHr) : 'none') }),
 el('p', { class: 'note', text: 'Verdicts are the $1,000 / 10% default; ticket and pool re-run the net only. The pool share is an assumption: the snapshot carries no drop data.' })
 );
 }
@@ -481,7 +481,7 @@ var nc = { 5: 0, 10: 0, 15: 0 }, be = [], fc = 0, p1 = 0, p25 = 0, p5 = 0;
 DATA.rows.forEach(function (r) { [5, 10, 15].forEach(function (s) { if (netOf(r, 1000, s / 100).net > 0) nc[s]++; }); var t = r.farm.breakeven_ticket_usd; if (t !== null) { be.push(t); if (t <= 1000) p1++; if (t <= 2500) p25++; if (t <= 5000) p5++; } if (r.farm.verdict === 'FARM') fc++; });
 be.sort(function (a, b) { return a - b; });
 var medianBe = medianOf(be);
-var netPanelText = 'A farm pays only when its expected allocation covers its costs: launch odds x pool share x implied value x (ticket / TVL), minus gas, time at $15/hour and 4% a year forgone on the ticket. At $1,000 and a 10% pool, ' + nc[10] + ' rows are net-positive and ' + fc + ' carry a FARM verdict; the median break-even ticket is ' + (medianBe === null ? 'n/a' : fmtMoney(medianBe)) + ' and ' + (DATA.rows.length - be.length) + ' rows never pay at any ticket. Break-even tickets: ' + p1 + ' pay at $1,000 or less, ' + p25 + ' at $2,500 or less, ' + p5 + ' at $5,000 or less. Net-positive rows at $1,000: ' + nc[5] + ' at a 5% pool, ' + nc[10] + ' at 10%, ' + nc[15] + ' at 15% \u2014 the pool share is an assumption, and the net moves with it. The old rule\u2019s median FARM row returned $13.74 expected for $30.93 of cost, so 104 of its 111 FARM rows lost money in expectation.';
+var netPanelText = 'Net = launch odds x pool share x implied value x (ticket / TVL), minus gas, time at $15/hour and 4% a year forgone on the ticket. At $1,000 and a 10% pool, ' + nc[10] + ' rows are net-positive and ' + fc + ' carry a FARM verdict; the median break-even ticket is ' + (medianBe === null ? 'n/a' : fmtMoney(medianBe)) + ' and ' + (DATA.rows.length - be.length) + ' rows never pay at any ticket. Break-even tickets: ' + p1 + ' pay at $1,000 or less, ' + p25 + ' at $2,500 or less, ' + p5 + ' at $5,000 or less. Net-positive rows at $1,000: ' + nc[5] + ' at a 5% pool, ' + nc[10] + ' at 10%, ' + nc[15] + ' at 15% \u2014 the pool share is an assumption, and the net moves with it. The old rule\u2019s median FARM row returned $14 for $31 of cost, so 104 of 111 FARM rows lost money.';
 var oddsBody = el('tbody');
 odds.calibration.forEach(function (c) {
 oddsBody.appendChild(el('tr', null,
@@ -513,7 +513,7 @@ el('h2', { text: 'How implied value is computed' }),
 el('p', { class: 'note', text: 'One curve scores every row, from the snapshot\u2019s own figures only.' }),
 el('div', { class: 'formula', text: 'log(market cap) = ' + DATA.curve.intercept + ' + ' + DATA.curve.slope + ' x log(TVL)   ·   implied = round( exp(a + b x log(TVL)) )' }),
 el('p', { class: 'note', text: 'Least squares on the logs of ' + DATA.curve.comps + ' traded comparables in this snapshot (a protocol counts when it records a market cap and TVL, is not a CEX and has no versioned name). Slope clamped to [' + P.slope_floor + ', ' + P.slope_cap + ']. Fitted range ' + fmtUsd(DATA.curve.tvl_min_usd) + ' to ' + fmtUsd(DATA.curve.tvl_max_usd) + ' of TVL; rows outside it are extrapolated. The curve rises with TVL, so the board orders by size, and sets the level and both error bands.' }),
-el('p', { class: 'note', text: 'Verdicts follow fixed numeric rules, the same for every row. SKIP when TVL is outside the fitted range or 7d growth is at or below ' + P.verdict_growth_skip + '%. THIN when growth is below ' + P.verdict_growth_thin + '% or launch odds are below ' + Math.round(P.verdict_odds_thin * 100) + '%, or the net at a $1,000 ticket and a 10% farmers\u2019 pool is not positive. Otherwise FARM. The bootstrap band is shown in each detail view but does not drive the verdict. A verdict is never a promise that a token launches.' })
+el('p', { class: 'note', text: 'Verdicts follow fixed numeric rules, the same for every row (see Method and evidence, below the board). SKIP when TVL is outside the fitted range or 7d growth is at or below ' + P.verdict_growth_skip + '%. THIN when growth is below ' + P.verdict_growth_thin + '% or launch odds are below ' + Math.round(P.verdict_odds_thin * 100) + '%, or the net at a $1,000 ticket and a 10% farmers\u2019 pool is not positive. Otherwise FARM. A verdict is never a promise that a token launches.' })
 ),
 el('div', { class: 'grid2' },
 el('section', { class: 'panel section' },
@@ -644,13 +644,13 @@ el('span', { class: 'total', text: 'Time ' + row.farm.active_minutes + ' min ($'
 el('span', { class: 'total', text: 'Total cost $' + row.farm.total_cost_usd }),
 el('span', { class: 'total', text: 'Break-even $' + row.farm.breakeven_usd + ' (' + row.farm.breakeven_pct_of_low + '% of the low-end value)' }),
 el('span', { class: 'total', text: 'Expectation break-even $' + row.farm.breakeven_ev_usd + ' at ' + Math.round(row.model.launch_odds * 100) + '% launch odds' }),
-el('span', { class: 'total', text: 'Net at $1,000 · 10%: ' + fmtSigned(row.farm.net_usd) + ' (EV ' + fmt2(row.farm.net_ev_usd) + ' \u2212 gas $' + row.farm.gas_usd + ' \u2212 time $' + row.farm.time_value_usd + ' \u2212 T-bill ' + fmt2(row.farm.net_forgone_usd) + ')' }),
+el('span', { class: 'total', text: 'Net at $1,000 · 10%: ' + fmtSigned(row.farm.net_usd) + ' (EV ~' + fmt2(row.farm.net_ev_usd) + ' \u2212 gas $' + row.farm.gas_usd + ' \u2212 time $' + row.farm.time_value_usd + ' \u2212 T-bill ~' + fmt2(row.farm.net_forgone_usd) + ')' }),
 el('span', { class: 'total', text: row.farm.breakeven_ticket_usd === null ? 'Never pays at any ticket: expected allocation per dollar is below the 4% risk-free rate' : 'Pays from a $' + row.farm.breakeven_ticket_usd.toLocaleString('en-US') + ' ticket' }),
 el('span', { class: 'total', text: 'Hold ' + row.farm.hold_days + ' days: ' + row.farm.start_date + ' to ' + row.farm.hold_until_date }),
 el('span', { class: 'total', text: 'Exit if TVL falls below ' + fmtUsd(row.farm.exit_tvl_usd) }),
 el('span', { class: 'total', text: 'Implied per $1 gas ' + fmtUsd(Math.round(row.implied_value_usd / Math.max(1, row.farm.gas_usd))) })
 ),
-el('p', { class: 'sub', text: 'Capital stays in the position and is not a fee; gas is the estimated cost of the plan\u2019s transactions on ' + (row.chains && row.chains.length ? row.chains[0] : 'its main chain') + '. Break-even is gas plus active time at $' + P.time_value_usd_per_hour + '/hr: what an allocation must exceed to net positive. The expectation break-even scales that cost by 1/launch odds: the allocation, if a token launches, that makes the plan positive in expectation. Implied-per-gas compares plans; it is never a promised return.' })
+el('p', { class: 'sub', text: 'Capital stays in the position and is not a fee; gas is the estimated cost of the plan\u2019s transactions on ' + (row.chains && row.chains.length ? row.chains[0] : 'its main chain') + '. Break-even is gas plus active time at $' + P.time_value_usd_per_hour + '/hr. The expectation break-even scales that cost by 1/launch odds. Implied-per-gas compares plans; it is never a promised return.' })
 ));
 dialog.appendChild(el('section', { class: 'detail-section' },
 el('h3', { text: 'Farm plan' }),
